@@ -95,7 +95,7 @@ func (c *Compressor) compressL0ToL1(ctx context.Context, userID int64) error {
 	defer llmCancel()
 	resp, err := c.llm.Chat(llmCtx, &llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: compressSystemPrompt},
+			{Role: llm.RoleSystem, Content: compressSystemPrompt + memory.AdmissionRules()},
 			{Role: llm.RoleUser, Content: prompt},
 		},
 	})
@@ -114,7 +114,13 @@ func (c *Compressor) compressL0ToL1(ctx context.Context, userID int64) error {
 	}
 
 	// 解析事实（兼容 []FactItem 与旧 []string），标注证据来源（本批次对话范围）
-	facts := model.ParseFacts(result.Facts)
+	var sources []string
+	for _, conv := range convs {
+		if conv.Role == "user" && conv.Source != model.SourcePlugin {
+			sources = append(sources, conv.Content)
+		}
+	}
+	facts := memory.AdmitFacts(model.ParseFacts(result.Facts), sources)
 	if len(convs) >= 1 {
 		ev := fmt.Sprintf("conv:%d-%d", convs[0].ID, convs[len(convs)-1].ID)
 		for i := range facts {
@@ -180,7 +186,7 @@ func (c *Compressor) compressL1ToL2(ctx context.Context, userID int64) error {
 	defer llmCancel()
 	resp, err := c.llm.Chat(llmCtx, &llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: clusterSystemPrompt},
+			{Role: llm.RoleSystem, Content: clusterSystemPrompt + memory.AdmissionRules()},
 			{Role: llm.RoleUser, Content: prompt},
 		},
 	})
@@ -202,10 +208,17 @@ func (c *Compressor) compressL1ToL2(ctx context.Context, userID int64) error {
 	// 相同事实重复确认 → 置信度 +0.05 封顶 0.98；不同事实各自保留（不自动判定矛盾，避免武断丢弃）。
 	// 须在 DeleteEpisodesByID 之前完成，保证被删 episode 的事实先沉淀进 topic。
 	var merged []model.FactItem
+	var admittedSources []string
 	for _, e := range episodes {
-		merged = model.MergeFacts(merged, model.ParseFacts(e.Facts))
+		for _, f := range model.ParseFacts(e.Facts) {
+			// 保留旧事实，不做存量清理；但没有准入字段的旧事实不能新增向量或为新抽取背书。
+			merged = model.MergeFacts(merged, []model.FactItem{f})
+			if len(memory.AdmitFacts([]model.FactItem{f}, []string{f.Quote})) > 0 {
+				admittedSources = append(admittedSources, f.Quote)
+			}
+		}
 	}
-	merged = model.MergeFacts(merged, model.ParseFacts(result.Facts))
+	merged = model.MergeFacts(merged, memory.AdmitFacts(model.ParseFacts(result.Facts), admittedSources))
 
 	topic := &model.TopicCluster{
 		UserID:       userID,
@@ -220,17 +233,9 @@ func (c *Compressor) compressL1ToL2(ctx context.Context, userID int64) error {
 		return fmt.Errorf("save topic: %w", err)
 	}
 
-	// 向量化后存入 Milvus（用于语义检索）
-	if c.embedder != nil && c.memStore != nil {
-		vec, err := c.embedder.Embed(ctx, result.Brief+" "+result.Detailed)
-		if err == nil {
-			_ = c.memStore.Store(ctx, &memory.Memory{
-				UserID:   userID,
-				Content:  result.Topic + ": " + result.Brief,
-				Vector:   vec,
-				Metadata: map[string]any{"level": "L2", "topic_id": topic.ID},
-			})
-		}
+	// 对话摘要用于历史连续性；只有通过准入的事实可进入长期向量召回。
+	if err := memory.StoreFacts(ctx, c.embedder, c.memStore, userID, "", merged); err != nil {
+		c.logger.Warn("compressor: store admitted facts", zap.Error(err))
 	}
 
 	var ids []int64
@@ -251,7 +256,7 @@ const compressSystemPrompt = `你是一个记忆压缩引擎。你的任务是�
 {
   "brief": "一句话总结这轮对话的核心内容（不超过50字）",
   "detailed": "详细摘要，保留关键事实、情感、决策（不超过200字）",
-  "facts": [{"key": "猫的毛色", "value": "白色", "confidence": 0.85}]
+  "facts": [{"key": "饮食偏好", "value": "用户长期不吃香菜", "confidence": 0.9, "kind": "preference", "importance": 0.8, "durable": true, "quote": "我长期不吃香菜"}]
 }
 
 facts 规则：
@@ -259,7 +264,7 @@ facts 规则：
 - key：命题主题（2-6字，细粒度——同一 key 应只有一种取值，如"猫的毛色"而非"宠物"）
 - value：每条事实不超过20字，格式如"用户喜欢猫"、"用户的猫叫小雪"、"用户提到贫血"
 - confidence：0~1，表示该事实在本次对话中的确信度——
-  被明确陈述/重复提及 → 0.8~0.95；仅一次提及但明确 → 0.6~0.8；间接暗示/低确信 → 0.4~0.6
+  被明确陈述/重复提及 → 0.8~0.95；仅一次提及但明确 → 0.65~0.8；间接暗示/低确信 → 0.4~0.6
 - 每条事实都必须给 key、value、confidence，禁止省略或编造
 
 插件输出规则：
@@ -283,14 +288,14 @@ const clusterSystemPrompt = `你是一个记忆聚合引擎。你的任务是阅
   "topic": "主题名称（2-6字，如'宠物话题'、'健康咨询'）",
   "brief": "一句话概括这些对话的主题（不超过50字）",
   "detailed": "详细描述该主题下的关键信息（不超过300字）",
-  "facts": [{"key": "宠物", "value": "用户喜欢猫", "confidence": 0.9}]
+  "facts": [{"key": "饮食偏好", "value": "用户长期不吃香菜", "confidence": 0.9, "kind": "preference", "importance": 0.8, "durable": true, "quote": "我长期不吃香菜"}]
 }
 
 facts 规则：
 - 只提取客观事实；value 每条不超过20字
 - key：命题主题（2-6字，细粒度——同一 key 应只有一种取值，如"猫的毛色"而非"宠物"）
 - confidence：0~1，表示该事实在汇总材料中的确信度——在多段摘要中重复出现 → 0.85~0.95；
-  仅出现一次但明确 → 0.6~0.8；间接/低确信 → 0.4~0.6
+  仅出现一次但明确 → 0.65~0.8；间接/低确信 → 0.4~0.6
 - 每条事实都必须给 key、value、confidence，禁止省略或编造
 
 注意：

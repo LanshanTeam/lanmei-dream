@@ -59,6 +59,9 @@ func Init() (*Config, error) {
 		"LANMEI_AI_EMBEDDING_BASE_URL":           "ai.embedding_base_url",
 		"LANMEI_AI_EMBEDDING_MODEL":              "ai.embedding_model",
 		"LANMEI_AI_EMBEDDING_DIM":                "ai.embedding_dim",
+		"LANMEI_AI_MEMORY_MIN_SIMILARITY":        "ai.memory_min_similarity",
+		"LANMEI_AI_MEMORY_MIN_CONFIDENCE":        "ai.memory_min_confidence",
+		"LANMEI_AI_MEMORY_MIN_IMPORTANCE":        "ai.memory_min_importance",
 		"LANMEI_PLUGIN_ROOT_DIR":                 "plugin.root_dir",
 		"LANMEI_PLUGIN_NCM_URL":                  "plugin.ncm_url",
 		"LANMEI_PLUGIN_MUSIC_SEND_MODE":          "plugin.music_send_mode",
@@ -206,6 +209,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ai.embedding_base_url", "https://api.openai.com/v1")
 	v.SetDefault("ai.embedding_model", "text-embedding-3-small")
 	v.SetDefault("ai.embedding_dim", 1024)
+	v.SetDefault("ai.memory_min_similarity", 0.60)
+	v.SetDefault("ai.memory_min_confidence", 0.65)
+	v.SetDefault("ai.memory_min_importance", 0.55)
 
 	// 数据库连接字符串从环境变量 LANMEI_DATABASE_URL 获取，此处仅保留默认
 	v.SetDefault("database.url", "postgres://postgres:postgres@localhost:5432/lanmei?sslmode=disable")

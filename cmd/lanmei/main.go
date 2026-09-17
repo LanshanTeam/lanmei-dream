@@ -11,6 +11,7 @@ import (
 	"github.com/DaWesen/lanmei-dream/internal/ai"
 	"github.com/DaWesen/lanmei-dream/internal/ai/embedding"
 	"github.com/DaWesen/lanmei-dream/internal/ai/llm"
+	"github.com/DaWesen/lanmei-dream/internal/ai/memory"
 	"github.com/DaWesen/lanmei-dream/internal/ai/prompt"
 	"github.com/DaWesen/lanmei-dream/internal/ai/skill"
 	"github.com/DaWesen/lanmei-dream/internal/ai/tool"
@@ -42,6 +43,9 @@ func main() {
 
 	logger := infra.InitLogger(&cfg.Log)
 	defer logger.Sync()
+	if err := memory.SetAdmissionThresholds(cfg.AI.MemoryMinConfidence, cfg.AI.MemoryMinImportance); err != nil {
+		logger.Fatal("memory admission threshold configuration invalid", zap.Error(err))
+	}
 
 	// 基础设施（PostgreSQL+pgvector + Redis + RustFS 对象存储）
 	// embeddingDim 透传给数据库迁移，保证 knowledge_chunks 向量列维度与模型一致
@@ -156,6 +160,9 @@ func main() {
 	if llmClient != nil {
 		toolReg = tool.NewRegistry()
 		chatSvc = ai.NewChatService(llmClient, embedder, inf.MemStore, inf.DB, toolReg, logger)
+		if err := chatSvc.SetMemoryMinSimilarity(cfg.AI.MemoryMinSimilarity); err != nil {
+			logger.Fatal("记忆相似度配置无效", zap.Error(err))
+		}
 		chatSvc.SetPromptManager(promptMgr)
 
 		// 知识库系统（provider 工厂注册 + 服务构建 + 工具注册 + 隐式召回注入）

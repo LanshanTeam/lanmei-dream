@@ -42,13 +42,12 @@ func (s *PGVectorStore) Store(ctx context.Context, mem *memory.Memory) error {
 
 // memoryGroupScope 构造记忆检索的群级过滤条件。
 //   - groupID 为空（私聊）：仅用户个人记忆（group_id=”）；
-//   - groupID 非空（群聊）：该群的群级记忆（group_id=gid）或该用户的个人记忆，
-//     避免跨群污染与个人记忆混淆。
+//   - groupID 非空（群聊）：仅本群记忆，禁止引用私聊或其他群的记忆。
 func memoryGroupScope(groupID string, userID int64) (scope string, args []any) {
 	if groupID == "" {
 		return "user_id = ? AND group_id = ''", []any{userID}
 	}
-	return "(group_id = ?) OR (user_id = ? AND group_id = '')", []any{groupID, userID}
+	return "group_id = ?", []any{groupID}
 }
 
 // Retrieve 根据查询向量检索最相关的 N 条记忆（向量召回）。
@@ -60,16 +59,25 @@ func (s *PGVectorStore) Retrieve(ctx context.Context, queryVec []float32, userID
 	vecStr := formatVector(queryVec)
 	scope, args := memoryGroupScope(groupID, userID)
 
-	var rows []model.MemoryVector
+	var rows []struct {
+		model.MemoryVector
+		Similarity float64
+	}
 	err := s.orm.WithContext(ctx).Raw(
-		`SELECT * FROM memory_vectors WHERE `+scope+` ORDER BY embedding <=> ?::vector LIMIT ?`,
-		append(args, vecStr, limit)...,
+		`SELECT *, 1 - (embedding <=> ?::vector) AS similarity FROM memory_vectors WHERE (`+scope+`) ORDER BY embedding <=> ?::vector LIMIT ?`,
+		append(append([]any{vecStr}, args...), vecStr, limit)...,
 	).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("pgvector retrieve: %w", err)
 	}
 
-	return rowsToMemories(rows), nil
+	result := make([]*memory.Memory, 0, len(rows))
+	for _, row := range rows {
+		m := rowsToMemories([]model.MemoryVector{row.MemoryVector})[0]
+		m.Similarity = row.Similarity
+		result = append(result, m)
+	}
+	return result, nil
 }
 
 // Delete 删除指定 ID 的记忆。
@@ -90,7 +98,7 @@ func (s *PGVectorStore) RetrieveByKeyword(ctx context.Context, query string, use
 		return nil, nil
 	}
 	scope, args := memoryGroupScope(groupID, userID)
-	whereSQL := scope + " AND search_vec @@ to_tsquery('simple', ?)"
+	whereSQL := "(" + scope + ") AND search_vec @@ to_tsquery('simple', ?)"
 	args = append(args, tsQuery)
 
 	var rows []model.MemoryVector
@@ -171,11 +179,12 @@ func rowsToMemories(rows []model.MemoryVector) []*memory.Memory {
 	memories := make([]*memory.Memory, len(rows))
 	for i, row := range rows {
 		memories[i] = &memory.Memory{
-			ID:      strconv.FormatInt(row.ID, 10),
-			UserID:  row.UserID,
-			GroupID: row.GroupID,
-			Content: row.Content,
-			Vector:  row.Embedding.Slice(),
+			ID:        strconv.FormatInt(row.ID, 10),
+			UserID:    row.UserID,
+			GroupID:   row.GroupID,
+			Content:   row.Content,
+			Vector:    row.Embedding.Slice(),
+			CreatedAt: row.CreatedAt,
 		}
 	}
 	return memories

@@ -19,13 +19,9 @@ import (
 // archiveMaxDialogueRunes 归档摘要输入的对话文本长度上限（rune），防 LLM 成本失控。
 const archiveMaxDialogueRunes = 4000
 
-// archiveMaxEmbedRunes 归档向量化文本长度上限（rune）。
-const archiveMaxEmbedRunes = 400
-
 // Archiver 冷却话题归档器：将话题窗口沉淀为群级长期记忆。
 // 写入 memories 表（user_id=0 群级 + metadata）与 memory_vectors 表（窗口摘要 embedding，
-// 供后续 RAG 群聊召回），并将 facts 合并进群画像；降级链：无 LLM → brief=标签、detailed=原文
-// 拼接、facts=成员列表，无 Embedder → 跳过向量化。
+// 供后续 RAG 群聊召回），并将 facts 合并进群画像；没有通过准入的事实时不写长期记忆。
 type Archiver struct {
 	llmClient llm.LLMClient
 	embedder  embedding.Embedder
@@ -80,7 +76,11 @@ func (a *Archiver) Archive(ctx context.Context, snap *ArchiveSnapshot) error {
 		return nil
 	}
 
-	brief, detailed, facts := a.summarize(ctx, snap)
+	brief, _, facts := a.summarize(ctx, snap)
+	if len(facts) == 0 {
+		a.logger.Debug("topic: 无长期价值事实，跳过记忆落库", zap.String("topic", snap.ID))
+		return nil
+	}
 	label := snap.Label
 	if label == "" {
 		label = defaultTopicLabel
@@ -88,7 +88,11 @@ func (a *Archiver) Archive(ctx context.Context, snap *ArchiveSnapshot) error {
 	if brief != "" {
 		label = brief
 	}
-	content := label + "：" + brief
+	var contents []string
+	for _, f := range facts {
+		contents = append(contents, "[主体:"+f.SubjectID+"] "+f.Value)
+	}
+	content := strings.Join(contents, "\n")
 	timeRange := fmt.Sprintf("%s ~ %s", snap.Window[0].SentAt.Format("01-02 15:04"), snap.Window[len(snap.Window)-1].SentAt.Format("01-02 15:04"))
 
 	if a.db != nil {
@@ -110,24 +114,8 @@ func (a *Archiver) Archive(ctx context.Context, snap *ArchiveSnapshot) error {
 		}
 	}
 
-	if a.memStore != nil && a.embedder != nil {
-		vec, err := a.embedder.Embed(ctx, truncateRunes(brief+" "+detailed, archiveMaxEmbedRunes))
-		if err == nil && len(vec) > 0 {
-			if err := a.memStore.Store(ctx, &memory.Memory{
-				UserID:  0, // 群级记忆
-				GroupID: snap.GroupID,
-				Content: content,
-				Vector:  vec,
-				Metadata: map[string]any{
-					"topic_id": snap.ID,
-					"members":  snap.Members,
-				},
-			}); err != nil {
-				a.logger.Warn("topic: 归档写 memory_vectors 失败", zap.String("topic", snap.ID), zap.Error(err))
-			}
-		} else {
-			a.logger.Warn("topic: 归档向量化失败，跳过向量记忆", zap.String("topic", snap.ID), zap.Error(err))
-		}
+	if err := memory.StoreFacts(ctx, a.embedder, a.memStore, 0, snap.GroupID, facts); err != nil {
+		a.logger.Warn("topic: 归档写 memory_vectors 失败", zap.String("topic", snap.ID), zap.Error(err))
 	}
 
 	// 归档事实并入群画像（跨话题沉淀群级长期记忆）
@@ -158,7 +146,7 @@ func (a *Archiver) summarize(ctx context.Context, snap *ArchiveSnapshot) (brief,
 	}
 	resp, err := a.llmClient.Chat(ctx, &llm.ChatRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: groupArchiveSystemPrompt},
+			{Role: llm.RoleSystem, Content: groupArchiveSystemPrompt + memory.AdmissionRules()},
 			{Role: llm.RoleUser, Content: dialogue},
 		},
 	})
@@ -170,6 +158,7 @@ func (a *Archiver) summarize(ctx context.Context, snap *ArchiveSnapshot) (brief,
 		return defaultBrief, truncateRunes(resp.Content, 300), nil
 	}
 	facts = model.ParseFacts(res.Facts) // 兼容 []FactItem 与旧 []string
+	facts = filterArchiveFacts(facts, snap.Window)
 	if strings.TrimSpace(res.Brief) == "" {
 		return defaultBrief, res.Detailed, facts
 	}
@@ -190,18 +179,46 @@ const groupArchiveSystemPrompt = `你是一个群聊话题记忆归档引擎。�
 {
   "brief": "一句话总结这个话题的核心内容（不超过50字）",
   "detailed": "详细摘要，保留关键事实、决策、参与者观点（不超过300字）",
-  "facts": [{"key": "周末活动", "value": "张三(10001)提议周末去爬山", "confidence": 0.85}]
+  "facts": [{"subject_id": "10001", "key": "饮食偏好", "value": "张三(10001)长期不吃香菜", "confidence": 0.9, "kind": "preference", "importance": 0.8, "durable": true, "quote": "我长期不吃香菜"}]
 }
 
 facts 规则：
+- subject_id：事实主体的平台用户ID，必须来自对话中的真人成员；群公共约定使用 "group"。不能确定主体的事实不提取，禁止用昵称、数据库ID或机器人ID代替
 - 只提取客观事实，不提取寒暄/闲聊
-- key：命题主题（2-6字，细粒度——同一 key 应只有一种取值，如"周末活动"、"餐厅推荐"）
-- value：每条事实不超过20字，格式如"张三(10001)提议周末去爬山"、"李四(10002)推荐了某家餐厅"
+- key：命题主题（2-6字，细粒度——同一 key 应只有一种取值，如"饮食偏好"、"长期项目"）
+- value：每条事实不超过120字，格式如"张三(10001)长期不吃香菜"；不要将一次推荐或临时活动自动归为长期偏好
 - 发言者必须保留括号内的用户ID（稳定身份锚点），即使昵称后来改了也能对应到同一人
-- confidence：0~1，表示该事实在本次对话中的确信度——明确陈述/重复提及 → 0.8~0.95；仅一次 → 0.6~0.8；间接 → 0.4~0.6
+- confidence：0~1，表示该事实在本次对话中的确信度——明确陈述/重复提及 → 0.8~0.95；仅一次 → 0.65~0.8；间接 → 0.4~0.6
 - 每条事实都必须给 key、value、confidence，禁止省略或编造
 
 注意：只输出 JSON，不要任何额外文字。`
+
+// filterArchiveFacts 不猜测旧格式或未知主体，避免将无法归属的事实写入群画像。
+func filterArchiveFacts(facts []model.FactItem, window []TopicMsg) []model.FactItem {
+	known := map[string]bool{"group": true}
+	for _, msg := range window {
+		if !msg.IsBot && msg.UserID != "" {
+			known[msg.UserID] = true
+		}
+	}
+	var out []model.FactItem
+	for _, fact := range facts {
+		fact.SubjectID = strings.TrimSpace(fact.SubjectID)
+		if known[fact.SubjectID] && strings.TrimSpace(fact.Key) != "" {
+			var sources []string
+			for _, msg := range window {
+				if !msg.IsBot && (fact.SubjectID == "group" || fact.SubjectID == msg.UserID) {
+					sources = append(sources, msg.Content)
+				}
+			}
+			out = append(out, memory.AdmitFacts([]model.FactItem{fact}, sources)...)
+			if len(out) == 5 {
+				break
+			}
+		}
+	}
+	return out
+}
 
 // formatWindow 将话题消息窗口格式化为对话文本（昵称/机器人交替行），供归档摘要与话题标签生成共用。
 // 用户消息以「昵称(用户ID)」标注发言者：用户ID 是稳定身份锚点（群昵称常变，只留昵称会让归档记忆

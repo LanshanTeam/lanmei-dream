@@ -157,10 +157,13 @@ type AIConfig struct {
 	LLMTemperature float64 `mapstructure:"llm_temperature"`
 
 	// Embedding 配置（OpenAI 兼容 API）
-	EmbeddingBaseURL string `mapstructure:"embedding_base_url"`
-	EmbeddingAPIKey  string `mapstructure:"embedding_api_key"`
-	EmbeddingModel   string `mapstructure:"embedding_model"`
-	EmbeddingDim     int    `mapstructure:"embedding_dim"`
+	EmbeddingBaseURL    string  `mapstructure:"embedding_base_url"`
+	EmbeddingAPIKey     string  `mapstructure:"embedding_api_key"`
+	EmbeddingModel      string  `mapstructure:"embedding_model"`
+	EmbeddingDim        int     `mapstructure:"embedding_dim"`
+	MemoryMinSimilarity float64 `mapstructure:"memory_min_similarity"`
+	MemoryMinConfidence float64 `mapstructure:"memory_min_confidence"`
+	MemoryMinImportance float64 `mapstructure:"memory_min_importance"`
 }
 
 // BotConfig 机器人配置

@@ -14,6 +14,11 @@ import (
 //
 // 以 jsonb 存于 EpisodeSummary.Facts / TopicCluster.Facts，兼容旧版 []string（按 0.5 置信度转换）。
 type FactItem struct {
+	Kind       string    `json:"kind,omitempty"` // preference/profile/project/commitment
+	Importance float64   `json:"importance,omitempty"`
+	Durable    bool      `json:"durable,omitempty"`
+	Quote      string    `json:"quote,omitempty"`      // 用户原文中的直接证据
+	SubjectID  string    `json:"subject_id,omitempty"` // 群事实主体：平台用户 ID；group 表示群公共事实
 	Key        string    `json:"key,omitempty"`
 	Value      string    `json:"value"`
 	Confidence float64   `json:"confidence"`
@@ -99,26 +104,27 @@ func MarshalFacts(facts []FactItem) []byte {
 	return data
 }
 
-// MergeFacts 跨摘要合并事实集合，按 value 精确匹配区分三态：新 value 追加；同 value 重复
+// MergeFacts 跨摘要合并事实集合，在同一 SubjectID 内按 value 精确匹配区分三态：新 value 追加；同 value 重复
 // 确认则提升置信度并合并证据；同 Key 但 value 不同视为矛盾，降置信、保留新 value 并把旧值
 // 记入 Conflict。无 Key 或 Key 不同的取值各自保留——矛盾暴露不确定性，降置信而非删除。
 func MergeFacts(existing, incoming []FactItem) []FactItem {
 	out := make([]FactItem, 0, len(existing)+len(incoming))
-	valueIdx := make(map[string]int, len(existing)+len(incoming)) // value -> out 索引
-	keyIdx := make(map[string]int, len(existing)+len(incoming))   // key -> out 索引
+	type identity struct{ subject, text string }
+	valueIdx := make(map[identity]int, len(existing)+len(incoming)) // (主体, value) -> out 索引
+	keyIdx := make(map[identity]int, len(existing)+len(incoming))   // (主体, key) -> out 索引
 
 	for _, f := range existing {
 		f.Value = strings.TrimSpace(f.Value)
 		if f.Value == "" {
 			continue
 		}
-		if _, dup := valueIdx[f.Value]; dup {
+		if _, dup := valueIdx[identity{f.SubjectID, f.Value}]; dup {
 			continue
 		}
 		f.Confidence = normalizeFactConfidence(f.Confidence)
-		valueIdx[f.Value] = len(out)
+		valueIdx[identity{f.SubjectID, f.Value}] = len(out)
 		if f.Key != "" {
-			keyIdx[f.Key] = len(out)
+			keyIdx[identity{f.SubjectID, f.Key}] = len(out)
 		}
 		out = append(out, f)
 	}
@@ -131,44 +137,54 @@ func MergeFacts(existing, incoming []FactItem) []FactItem {
 		f.Confidence = normalizeFactConfidence(f.Confidence)
 
 		// 确认：同一 value 重复出现
-		if i, ok := valueIdx[f.Value]; ok {
+		if i, ok := valueIdx[identity{f.SubjectID, f.Value}]; ok {
+			if f.Durable && f.Quote != "" {
+				out[i].Kind = f.Kind
+				out[i].Importance = f.Importance
+				out[i].Durable = f.Durable
+				out[i].Quote = f.Quote
+			}
 			out[i].Confidence = min(max(out[i].Confidence, f.Confidence)+factBumpStep, maxFactConfidence)
 			out[i].Evidence = mergeFactEvidence(out[i].Evidence, f.Evidence)
 			if f.At.After(out[i].At) {
 				out[i].At = f.At
 			}
 			if f.Key != "" {
-				keyIdx[f.Key] = i
+				keyIdx[identity{f.SubjectID, f.Key}] = i
 			}
 			continue
 		}
 
 		// 矛盾：同 Key 但 value 不同（同一命题出现相反/不同取值）
 		if f.Key != "" {
-			if j, ok := keyIdx[f.Key]; ok && out[j].Value != f.Value {
+			if j, ok := keyIdx[identity{f.SubjectID, f.Key}]; ok && out[j].Value != f.Value {
 				old := out[j]
 				nc := min(old.Confidence, f.Confidence) - factConflictPenalty
 				if nc < factConflictFloor {
 					nc = factConflictFloor
 				}
 				out[j].Value = f.Value
+				out[j].Kind = f.Kind
+				out[j].Importance = f.Importance
+				out[j].Durable = f.Durable
+				out[j].Quote = f.Quote
 				out[j].Confidence = nc
 				out[j].Conflict = old.Value
 				out[j].Evidence = mergeFactEvidence(old.Evidence, f.Evidence)
 				if f.At.After(old.At) {
 					out[j].At = f.At
 				}
-				delete(valueIdx, old.Value)
-				valueIdx[f.Value] = j
-				keyIdx[f.Key] = j
+				delete(valueIdx, identity{old.SubjectID, old.Value})
+				valueIdx[identity{f.SubjectID, f.Value}] = j
+				keyIdx[identity{f.SubjectID, f.Key}] = j
 				continue
 			}
 		}
 
 		// 插入：新事实
-		valueIdx[f.Value] = len(out)
+		valueIdx[identity{f.SubjectID, f.Value}] = len(out)
 		if f.Key != "" {
-			keyIdx[f.Key] = len(out)
+			keyIdx[identity{f.SubjectID, f.Key}] = len(out)
 		}
 		out = append(out, f)
 	}

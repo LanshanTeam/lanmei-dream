@@ -84,6 +84,11 @@ func (db *DB) Migrate(ctx context.Context, vectorDim int) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
+	// 新主体唯一索引已由 AutoMigrate 建立，再移除旧索引；保留旧事实但不猜测主体。
+	if err := db.migrateGroupFactIndex(ctx); err != nil {
+		return err
+	}
+
 	// HNSW 向量索引（IF NOT EXISTS 幂等，已存在则跳过）。
 	db.Orm.WithContext(ctx).Exec(
 		"CREATE INDEX IF NOT EXISTS idx_memory_vectors_embedding ON memory_vectors USING hnsw (embedding vector_cosine_ops)",
@@ -154,5 +159,13 @@ CREATE TRIGGER trg_memory_vectors_search_vec
 		db.logger.Info("向量维度已调整并重建索引", zap.Int("dim", vectorDim))
 	}
 
+	return nil
+}
+
+// migrateGroupFactIndex 允许同一群中不同主体拥有相同命题，重复启动可安全执行。
+func (db *DB) migrateGroupFactIndex(ctx context.Context) error {
+	if err := db.Orm.WithContext(ctx).Exec("DROP INDEX IF EXISTS uq_group_fact_key").Error; err != nil {
+		return fmt.Errorf("migrate group fact index: %w", err)
+	}
 	return nil
 }

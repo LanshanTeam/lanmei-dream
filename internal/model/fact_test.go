@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestMergeFactsDifferentSubjects(t *testing.T) {
+	for _, value := range []string{"猫", "狗"} {
+		facts := MergeFacts([]FactItem{{SubjectID: "10001", Key: "宠物", Value: "猫", Confidence: 0.8}}, []FactItem{{SubjectID: "10002", Key: "宠物", Value: value, Confidence: 0.8}})
+		if len(facts) != 2 || facts[0].Confidence != 0.8 || facts[1].Confidence != 0.8 || facts[0].Conflict != "" || facts[1].Conflict != "" {
+			t.Fatalf("subjects merged: %+v", facts)
+		}
+		back := ParseFacts(MarshalFacts(facts))
+		if len(back) != 2 || back[0].SubjectID != "10001" || back[1].SubjectID != "10002" {
+			t.Fatalf("subject round trip failed: %+v", back)
+		}
+	}
+}
+
 // TestParseFactsNewFormat 新格式 []FactItem 直接解析并归一化。
 func TestParseFactsNewFormat(t *testing.T) {
 	raw := []byte(`[{"value":"用户喜欢猫","confidence":0.85},{"value":"用户的猫叫小雪","confidence":1.5},{"value":"  ","confidence":0.9}]`)

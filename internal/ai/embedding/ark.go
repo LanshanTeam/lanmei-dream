@@ -120,6 +120,9 @@ func (e *VolcEmbedder) embedOne(ctx context.Context, text string) ([]float32, er
 	if len(out.Data.Embedding) == 0 {
 		return nil, fmt.Errorf("embedding: 响应缺少 embedding 向量")
 	}
+	if len(out.Data.Embedding) != e.dimension {
+		return nil, fmt.Errorf("embedding: dimension mismatch: configured %d, received %d; check LANMEI_AI_EMBEDDING_DIM", e.dimension, len(out.Data.Embedding))
+	}
 
 	v := make([]float32, len(out.Data.Embedding))
 	for j, f := range out.Data.Embedding {

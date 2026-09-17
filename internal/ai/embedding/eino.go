@@ -70,6 +70,9 @@ func (e *EinoEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 
 	vecs32 := make([][]float32, len(vecs64))
 	for i, v64 := range vecs64 {
+		if len(v64) != e.dimension {
+			return nil, fmt.Errorf("embedding: dimension mismatch: configured %d, received %d; check LANMEI_AI_EMBEDDING_DIM", e.dimension, len(v64))
+		}
 		v32 := make([]float32, len(v64))
 		for j, f := range v64 {
 			v32[j] = float32(f)

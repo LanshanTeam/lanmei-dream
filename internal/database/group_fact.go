@@ -15,7 +15,7 @@ import (
 // 导致同 key 事实的 confirm/矛盾更新互相覆盖（lost update）。
 var groupFactMu sync.Map // groupID -> *sync.Mutex
 
-// MergeGroupFacts 将新抽取的群事实并入该群画像（三态合并，按 (group_id, key) upsert）。
+// MergeGroupFacts 将新抽取的群事实并入该群画像（按群、主体、命题 upsert）。
 //
 // 复用 model.MergeFacts：同值重复确认提升置信度；同 key 异值视为矛盾、降置信并保留旧值到
 // Conflict；新 key 追加。按 groupID 加锁串行化"读-改-写"，避免并发归档丢更新（lost update）。
@@ -41,10 +41,13 @@ func (db *DB) MergeGroupFacts(ctx context.Context, groupID string, incoming []mo
 
 	now := time.Now()
 	for _, f := range merged {
+		if f.SubjectID == "" || f.Key == "" {
+			continue // 旧数据保留，不将未知主体继续写回或晋升为公共事实
+		}
 		ev, _ := json.Marshal(f.Evidence)
 		var target model.GroupFact
 		err := db.Orm.WithContext(ctx).
-			Where("group_id = ? AND key = ?", groupID, f.Key).
+			Where("group_id = ? AND subject_id = ? AND key = ?", groupID, f.SubjectID, f.Key).
 			First(&target).Error
 		if err == nil {
 			// 更新既有行（key 是身份，矛盾分支只改 value/confidence）
@@ -62,6 +65,7 @@ func (db *DB) MergeGroupFacts(ctx context.Context, groupID string, incoming []mo
 		}
 		if err := db.Orm.WithContext(ctx).Create(&model.GroupFact{
 			GroupID:    groupID,
+			SubjectID:  f.SubjectID,
 			Key:        f.Key,
 			Value:      f.Value,
 			Confidence: f.Confidence,
@@ -76,7 +80,7 @@ func (db *DB) MergeGroupFacts(ctx context.Context, groupID string, incoming []mo
 	return nil
 }
 
-// GetGroupFacts 返回某群的长期事实画像，按置信度降序取前 limit 条。
+// GetGroupFacts 返回某群主体明确的长期事实画像，按置信度降序取前 limit 条。
 // 供群聊对话上下文注入（消费端按 FactMinConfidence / FactThinConfidence 门槛处理）。
 func (db *DB) GetGroupFacts(ctx context.Context, groupID string, limit int) ([]model.FactItem, error) {
 	if groupID == "" || limit <= 0 {
@@ -84,7 +88,7 @@ func (db *DB) GetGroupFacts(ctx context.Context, groupID string, limit int) ([]m
 	}
 	var rows []model.GroupFact
 	err := db.Orm.WithContext(ctx).
-		Where("group_id = ?", groupID).
+		Where("group_id = ? AND subject_id <> ''", groupID).
 		Order("confidence DESC").
 		Limit(limit).
 		Find(&rows).Error
@@ -105,6 +109,7 @@ func rowToFactItem(r model.GroupFact) model.FactItem {
 		_ = json.Unmarshal(r.Evidence, &ev)
 	}
 	return model.FactItem{
+		SubjectID:  r.SubjectID,
 		Key:        r.Key,
 		Value:      r.Value,
 		Confidence: r.Confidence,

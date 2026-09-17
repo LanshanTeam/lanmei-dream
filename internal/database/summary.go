@@ -150,6 +150,25 @@ func (db *DB) GetLODContext(ctx context.Context, userID int64, groupID string, b
 	// 粗估：1 个中文字 ≈ 1.5 token，这里用字符数粗算。
 	charsPerToken := 1.5
 
+	// L1/L2 仅由私聊压缩生成，群聊只能加载本群原文。
+	if groupID != "" {
+		limit := budget / 30
+		if limit < 2 {
+			limit = 2
+		}
+		if limit > 40 {
+			limit = 40
+		}
+		if budget > 0 {
+			convs, err := db.GetRecentConversations(ctx, userID, groupID, limit)
+			if err != nil {
+				return nil, fmt.Errorf("lod group l0: %w", err)
+			}
+			result.RawConversations = convs
+		}
+		return result, nil
+	}
+
 	// L2：主题 brief（最便宜，先填）
 	topics, err := db.GetRecentTopics(ctx, userID, 10)
 	if err != nil {
