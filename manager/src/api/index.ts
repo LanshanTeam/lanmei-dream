@@ -13,6 +13,7 @@ import type {
   GroupView,
   KnowledgeBaseView,
   KnowledgeChunk,
+  KnowledgeFile,
   LLMProvider,
   MeInfo,
   MemoryView,
@@ -255,6 +256,23 @@ export const contentApi = {
       method: 'POST',
       stepUpToken,
     }),
+  knowledgeFiles: (base = '') =>
+    request<Page<KnowledgeFile>>(`/api/knowledge/files${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  uploadKnowledgeFiles: (files: File[], base: string, stepUpToken: string) => {
+    const form = new FormData()
+    if (base) form.set('base', base)
+    files.forEach((f) => form.append('files', f))
+    return request<{ ok: boolean; files: string[] }>('/api/knowledge/files', {
+      method: 'POST',
+      body: form,
+      stepUpToken,
+    })
+  },
+  deleteKnowledgeFile: (name: string, base: string, stepUpToken: string) =>
+    request<{ ok: boolean }>(
+      `/api/knowledge/files/${encodeURIComponent(name)}${base ? `?base=${encodeURIComponent(base)}` : ''}`,
+      { method: 'DELETE', stepUpToken },
+    ),
   memories: (params: { userId?: string; groupId?: string; keyword?: string; page?: number; pageSize?: number }) => {
     const q = new URLSearchParams()
     if (params.userId) q.set('user_id', params.userId)

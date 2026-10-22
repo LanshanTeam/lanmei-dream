@@ -1,13 +1,13 @@
 <script setup lang="ts">
-// 知识库管理：知识库列表（元信息 + 分块数）+ 分块浏览/搜索/删除 + 内容重同步
+// 知识库管理：知识库列表（元信息 + 分块数）+ 知识文件导入/删除 + 分块浏览/搜索/删除 + 内容重同步
 import { onMounted, ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import type { PrimaryTableCol } from 'tdesign-vue-next'
-import { RefreshCw, Trash2 } from 'lucide-vue-next'
+import type { PrimaryTableCol, UploadFile } from 'tdesign-vue-next'
+import { RefreshCw, Trash2, Upload } from 'lucide-vue-next'
 import { contentApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import StepUpDialog from '@/components/StepUpDialog.vue'
-import type { KnowledgeBaseView, KnowledgeChunk } from '@/types/api'
+import type { KnowledgeBaseView, KnowledgeChunk, KnowledgeFile } from '@/types/api'
 
 const columns: PrimaryTableCol[] = [
   { colKey: 'id', title: 'ID', width: 80, align: 'center' },
@@ -17,6 +17,17 @@ const columns: PrimaryTableCol[] = [
   { colKey: 'created_at', title: '更新时间', width: 160 },
   { colKey: 'ops', title: '操作', width: 90, fixed: 'right' },
 ]
+
+const fileColumns: PrimaryTableCol[] = [
+  { colKey: 'name', title: '文件', width: 260 },
+  { colKey: 'size', title: '大小', width: 120 },
+  { colKey: 'updated_at', title: '更新时间', width: 180 },
+  { colKey: 'ops', title: '操作', width: 90, fixed: 'right' },
+]
+
+// 与后端 handlers.maxImportFileSize / maxImportFileCount 保持一致
+const MAX_FILE_SIZE = 8 * 1024 * 1024
+const MAX_FILE_COUNT = 10
 
 const auth = useAuthStore()
 
@@ -32,6 +43,11 @@ const pageSize = 20
 
 const stepUpVisible = ref(false)
 const pendingAction = ref<((token: string) => Promise<void>) | null>(null)
+
+const files = ref<KnowledgeFile[]>([])
+const filesLoading = ref(false)
+const uploading = ref(false)
+const pendingFiles = ref<UploadFile[]>([])
 
 async function loadBases() {
   try {
@@ -60,6 +76,18 @@ async function loadChunks() {
   }
 }
 
+async function loadFiles() {
+  filesLoading.value = true
+  try {
+    const res = await contentApi.knowledgeFiles(currentBase.value)
+    files.value = res.items
+  } catch (err) {
+    MessagePlugin.error(err instanceof Error ? err.message : '知识文件加载失败')
+  } finally {
+    filesLoading.value = false
+  }
+}
+
 function pageChange(p: { current: number }) {
   page.value = p.current
   void loadChunks()
@@ -74,6 +102,65 @@ function selectBase(id: string) {
   currentBase.value = id
   page.value = 1
   void loadChunks()
+  void loadFiles()
+}
+
+// 上传前的本地校验：类型与大小先挡一道，避免白跑一次 step-up 与一次大体积请求
+function pickFiles(): File[] | null {
+  const picked = pendingFiles.value
+    .map((f) => f.raw)
+    .filter((f): f is File => f instanceof File)
+  if (picked.length === 0) {
+    MessagePlugin.warning('请先选择文件')
+    return null
+  }
+  if (picked.length > MAX_FILE_COUNT) {
+    MessagePlugin.error(`单次最多上传 ${MAX_FILE_COUNT} 个文件`)
+    return null
+  }
+  const invalidExt = picked.find((f) => !/\.(md|csv)$/i.test(f.name))
+  if (invalidExt) {
+    MessagePlugin.error(`不支持的文件类型：${invalidExt.name}（仅支持 .md / .csv）`)
+    return null
+  }
+  const tooLarge = picked.find((f) => f.size > MAX_FILE_SIZE)
+  if (tooLarge) {
+    MessagePlugin.error(`文件 ${tooLarge.name} 超过 8MB 上限`)
+    return null
+  }
+  return picked
+}
+
+function uploadFiles() {
+  const picked = pickFiles()
+  if (!picked) return
+  stepUpVisible.value = true
+  pendingAction.value = async (token) => {
+    uploading.value = true
+    try {
+      const res = await contentApi.uploadKnowledgeFiles(picked, currentBase.value, token)
+      MessagePlugin.success(`已导入 ${res.files.length} 个文件并完成同步`)
+      pendingFiles.value = []
+      await Promise.all([loadFiles(), loadBases(), loadChunks()])
+    } catch (err) {
+      MessagePlugin.error(err instanceof Error ? err.message : '文件导入失败')
+    } finally {
+      uploading.value = false
+    }
+  }
+}
+
+function removeFile(file: KnowledgeFile) {
+  stepUpVisible.value = true
+  pendingAction.value = async (token) => {
+    try {
+      await contentApi.deleteKnowledgeFile(file.name, currentBase.value, token)
+      MessagePlugin.success('文件已删除，对应分块已清理')
+      await Promise.all([loadFiles(), loadBases(), loadChunks()])
+    } catch (err) {
+      MessagePlugin.error(err instanceof Error ? err.message : '文件删除失败')
+    }
+  }
 }
 
 function removeChunk(chunk: KnowledgeChunk) {
@@ -109,9 +196,16 @@ function formatTime(s: string): string {
   return new Date(s).toLocaleString()
 }
 
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 onMounted(() => {
   void loadBases()
   void loadChunks()
+  void loadFiles()
 })
 </script>
 
@@ -144,6 +238,39 @@ onMounted(() => {
         </t-card>
       </t-col>
     </t-row>
+
+    <t-card title="知识文件" class="mb-16">
+      <t-space v-if="auth.isSuper" class="mb-16" direction="vertical" :size="8">
+        <t-upload
+          v-model="pendingFiles"
+          :auto-upload="false"
+          :multiple="true"
+          :max="MAX_FILE_COUNT"
+          accept=".md,.csv"
+          :tips="`仅支持 .md / .csv，单文件 8MB 以内，单次最多 ${MAX_FILE_COUNT} 个；同名文件直接覆盖`"
+        />
+        <t-button theme="primary" :loading="uploading" @click="uploadFiles">
+          <template #icon><Upload :size="16" /></template>
+          上传并同步
+        </t-button>
+      </t-space>
+      <t-table
+        :data="files"
+        :loading="filesLoading"
+        row-key="name"
+        size="small"
+        :columns="fileColumns"
+      >
+        <template #name="{ row }">{{ row.name }}</template>
+        <template #size="{ row }">{{ formatSize(row.size) }}</template>
+        <template #updated_at="{ row }">{{ formatTime(row.updated_at) }}</template>
+        <template #ops="{ row }">
+          <t-button v-if="auth.isSuper" size="small" variant="base" theme="danger" @click="removeFile(row)">
+            <template #icon><Trash2 :size="14" /></template>删除
+          </t-button>
+        </template>
+      </t-table>
+    </t-card>
 
     <t-card title="知识分块">
       <t-space class="mb-16">

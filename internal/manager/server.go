@@ -125,8 +125,11 @@ func New(cfg *config.ManagerConfig, deps Deps) (*Manager, error) {
 	}
 
 	m.app = fiber.New(fiber.Config{
-		AppName:      "lanmei-manager",
-		BodyLimit:    4 * 1024 * 1024,
+		AppName: "lanmei-manager",
+		// 上限需容纳知识库文件上传（multipart，c.MultipartForm 按此值截断请求体）：
+		// 与 manager/nginx.conf 的 client_max_body_size 保持一致，单文件上限另见
+		// handlers.maxImportFileSize
+		BodyLimit:    16 * 1024 * 1024,
 		ErrorHandler: defaultErrorHandler(deps.Logger),
 	})
 	m.setupRoutes()
@@ -270,6 +273,10 @@ func (m *Manager) setupRoutes() {
 	protected.Get("/knowledge/chunks", h.ListKnowledgeChunks)
 	protected.Delete("/knowledge/chunks/:id", super, stepUp, h.DeleteKnowledgeChunk)
 	protected.Post("/knowledge/sync", super, stepUp, h.SyncKnowledge)
+	// 知识文件导入（上传目录 = provider 的 docs_dir/uploads，上传/删除后自动同步）
+	protected.Get("/knowledge/files", h.ListKnowledgeFiles)
+	protected.Post("/knowledge/files", super, stepUp, h.UploadKnowledgeFiles)
+	protected.Delete("/knowledge/files/:name", super, stepUp, h.DeleteKnowledgeFile)
 
 	protected.Get("/memories", h.ListMemories)
 	protected.Delete("/memories/:id", super, stepUp, h.DeleteMemory)

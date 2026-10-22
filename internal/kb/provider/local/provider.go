@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/DaWesen/lanmei-dream/internal/ai/embedding"
@@ -19,6 +21,11 @@ import (
 
 // providerName 本地 provider 的类型标识。
 const providerName = "local"
+
+// importSubdir 面板文件导入子目录：上传文件落在 docs_dir/importSubdir 下，
+// 既与人工维护的知识文件隔离，又处在 walkFiles 的递归扫描范围内
+// （放到 docs_dir 之外的文件下次同步会被 deleteMissing 清掉分块）。
+const importSubdir = "uploads"
 
 // defaultFuzzyThreshold 模糊召回的最低相似度阈值。
 const defaultFuzzyThreshold = 0.1
@@ -71,6 +78,18 @@ func (p *Provider) Capabilities() kbpkg.Capabilities {
 
 // Close 实现 kb.Provider：本地 provider 无独立连接需释放（复用全局连接池）。
 func (p *Provider) Close() error { return nil }
+
+// ImportDir 实现 kb.FileImporter：返回（必要时创建）管理面板的文件导入目录。
+func (p *Provider) ImportDir() (string, error) {
+	if p.docsDir == "" {
+		return "", fmt.Errorf("kb local: 未配置 docs_dir，无法导入文件")
+	}
+	dir := filepath.Join(p.docsDir, importSubdir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("kb local: 创建导入目录 %s: %w", dir, err)
+	}
+	return dir, nil
+}
 
 // toChunk 将数据库行映射为 provider 无关的分块表示。
 func (p *Provider) toChunk(row *modelRow) *kbpkg.Chunk {

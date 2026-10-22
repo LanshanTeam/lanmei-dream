@@ -149,6 +149,10 @@ services:
       - ./quizdata:/app/quizdata:ro
       # 知识库目录（只读）：Markdown / CSV 文件自动摄入
       - ./docs:/app/docs:ro
+      # 面板上传的知识文件目录（可写）：嵌套挂载覆盖上一条的只读，
+      # 保证人工维护的知识文件在容器内仍不可改，只有 uploads 子目录可写；
+      # 该子目录位于 docs_dir 内，上传/删除后由面板触发的同步摄入与清理
+      - ./docs/uploads:/app/docs/uploads
     ports:
       - "${LANMEI_PORT:-8080}:8080"
     depends_on:

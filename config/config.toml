@@ -242,6 +242,8 @@ recall_limit = 5                    # 单模式召回上限
 
 [knowledge.bases.config]
 docs_dir = "./docs"                 # 知识文件目录（相对程序运行目录），支持 .md 与 .csv
+# 管理面板的"知识文件"上传落在 <docs_dir>/uploads（同名覆盖，上传/删除后自动同步）；
+# 该子目录需在容器内可写（docker-compose 已单独挂载），其余知识文件保持只读
 fuzzy_threshold = 0.1               # 模糊召回最低相似度阈值
 # CSV 规则表说明：
 #   与飞书表格结构同构：A 列=关键词、B 列=回复（C 列匹配形式忽略），每行一条知识。
