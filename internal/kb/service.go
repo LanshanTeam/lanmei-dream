@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -161,6 +162,59 @@ func (s *Service) List() []KnowledgeBase {
 		return nil
 	}
 	return s.engine.List()
+}
+
+// ImportDir 返回指定知识库的文件导入目录（管理面板上传入口）。
+//
+// 参数：
+//   - kbID：目标知识库 ID；为空时取唯一支持文件导入的知识库
+//
+// 返回：目录路径（不存在时由 provider 创建）；知识库未启用、kbID 不存在、
+// provider 不支持文件导入，或为空 kbID 但支持导入的库不是恰好一个时返回错误
+//
+// 注意：支持导入的库多于一个时必须显式指定 kbID，否则文件会落到不可预期的库
+func (s *Service) ImportDir(kbID string) (string, error) {
+	if s == nil || s.engine == nil {
+		return "", errors.New("kb: 知识库未启用")
+	}
+	if kbID != "" {
+		p, ok := s.engine.Provider(kbID)
+		if !ok {
+			return "", fmt.Errorf("kb: 知识库 %q 不存在", kbID)
+		}
+		fi, ok := p.(FileImporter)
+		if !ok {
+			return "", fmt.Errorf("kb: 知识库 %q 不支持文件导入", kbID)
+		}
+		return fi.ImportDir()
+	}
+
+	dir := ""
+	found := 0
+	for _, kbb := range s.engine.List() {
+		p, ok := s.engine.Provider(kbb.ID)
+		if !ok {
+			continue
+		}
+		fi, ok := p.(FileImporter)
+		if !ok {
+			continue
+		}
+		d, err := fi.ImportDir()
+		if err != nil {
+			return "", err
+		}
+		dir = d
+		found++
+	}
+	switch found {
+	case 0:
+		return "", errors.New("kb: 没有支持文件导入的知识库")
+	case 1:
+		return dir, nil
+	default:
+		return "", errors.New("kb: 存在多个支持文件导入的知识库，请指定 base")
+	}
 }
 
 // Sync 触发内容重同步（管理面板"重新同步"入口）。

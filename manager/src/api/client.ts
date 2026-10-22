@@ -104,13 +104,15 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     const csrf = localStorage.getItem(LS_CSRF) ?? readCsrfFromCookie()
     if (csrf) headers['X-CSRF-Token'] = csrf
   }
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  // FormData（文件上传）不能手动指定 Content-Type：需要浏览器补齐 multipart boundary
+  const isForm = body instanceof FormData
+  if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json'
 
   const doFetch = () =>
     fetch(path, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
       credentials: 'same-origin',
       signal,
     })

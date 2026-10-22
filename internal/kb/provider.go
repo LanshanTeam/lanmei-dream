@@ -78,6 +78,14 @@ type Syncer interface {
 	Sync(ctx context.Context) error
 }
 
+// FileImporter 可选接口：支持管理面板导入知识文件的 Provider（当前为本地知识库）。
+// 导入目录必须是该 Provider 自身同步范围内的独立子目录：既与人工维护的知识文件隔离，
+// 又要能被内容同步扫描到，否则下次同步会把这些文件视为"已删除"而清掉其分块。
+type FileImporter interface {
+	// ImportDir 返回文件导入目录（绝对路径或相对进程工作目录）；目录不存在时创建。
+	ImportDir() (string, error)
+}
+
 // Ingester 可选接口：支持内容写入的 Provider（本地知识库）。
 // kb_add 工具通过此接口录入知识，Provider 内部负责向量化。
 type Ingester interface {

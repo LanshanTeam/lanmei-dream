@@ -249,6 +249,12 @@ export interface KnowledgeChunk {
   updated_at: string
 }
 
+export interface KnowledgeFile {
+  name: string
+  size: number
+  updated_at: string
+}
+
 export interface MemoryView {
   id: number
   user_id: number
