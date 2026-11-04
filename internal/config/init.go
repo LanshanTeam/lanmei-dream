@@ -42,48 +42,57 @@ func Init() (*Config, error) {
 	// 故在 Unmarshal 前把 LANMEI_ 环境变量按显式映射写入 Viper，确保 Sub() 能找到它们；
 	// 该映射不可由 ReplaceAll("_", ".") 反推，因为部分键名本身含下划线（如 llm_api_key）。
 	envToCfg := map[string]string{
-		"LANMEI_DATABASE_URL":                    "database.url",
-		"LANMEI_REDIS_ADDR":                      "redis.addr",
-		"LANMEI_BOT_NICKNAME":                    "bot.nickname",
-		"LANMEI_BOT_SUPER_USERS":                 "bot.super_users",
-		"LANMEI_BOT_GATEWAY_LISTEN_ADDR":         "bot.gateway.listen_addr",
-		"LANMEI_BOT_GATEWAY_ACCESS_TOKEN":        "bot.gateway.access_token",
-		"LANMEI_BOT_INTENT_TIMEOUT_SECONDS":      "bot.intent_timeout_seconds",
-		"LANMEI_BOT_TURTLE_SOUP_TIMEOUT_SECONDS": "bot.turtle_soup_timeout_seconds",
-		"LANMEI_AI_LLM_API_KEY":                  "ai.llm_api_key",
-		"LANMEI_AI_LLM_BASE_URL":                 "ai.llm_base_url",
-		"LANMEI_AI_LLM_MODEL":                    "ai.llm_model",
-		"LANMEI_AI_LLM_MAX_TOKENS":               "ai.llm_max_tokens",
-		"LANMEI_AI_LLM_TEMPERATURE":              "ai.llm_temperature",
-		"LANMEI_AI_INTENT_JUDGE_API_KEY":         "ai.intent_judge.api_key",
-		"LANMEI_AI_INTENT_JUDGE_BASE_URL":        "ai.intent_judge.base_url",
-		"LANMEI_AI_INTENT_JUDGE_MODEL":           "ai.intent_judge.model",
-		"LANMEI_AI_INTENT_JUDGE_TIMEOUT_SECONDS": "ai.intent_judge.timeout_seconds",
-		"LANMEI_AI_EMBEDDING_API_KEY":            "ai.embedding_api_key",
-		"LANMEI_AI_EMBEDDING_BASE_URL":           "ai.embedding_base_url",
-		"LANMEI_AI_EMBEDDING_MODEL":              "ai.embedding_model",
-		"LANMEI_AI_EMBEDDING_DIM":                "ai.embedding_dim",
-		"LANMEI_AI_MEMORY_MIN_SIMILARITY":        "ai.memory_min_similarity",
-		"LANMEI_AI_MEMORY_MIN_CONFIDENCE":        "ai.memory_min_confidence",
-		"LANMEI_AI_MEMORY_MIN_IMPORTANCE":        "ai.memory_min_importance",
-		"LANMEI_PLUGIN_ROOT_DIR":                 "plugin.root_dir",
-		"LANMEI_PLUGIN_NCM_URL":                  "plugin.ncm_url",
-		"LANMEI_PLUGIN_MUSIC_SEND_MODE":          "plugin.music_send_mode",
-		"LANMEI_PLUGIN_ANTIFRAUD_ENDPOINT":       "plugin.antifraud.endpoint",
-		"LANMEI_PLUGIN_ANTIFRAUD_AUTO_THRESHOLD": "plugin.antifraud.auto_threshold",
+		"LANMEI_DATABASE_URL":                      "database.url",
+		"LANMEI_REDIS_ADDR":                        "redis.addr",
+		"LANMEI_BOT_NICKNAME":                      "bot.nickname",
+		"LANMEI_BOT_SUPER_USERS":                   "bot.super_users",
+		"LANMEI_BOT_GATEWAY_LISTEN_ADDR":           "bot.gateway.listen_addr",
+		"LANMEI_BOT_GATEWAY_ACCESS_TOKEN":          "bot.gateway.access_token",
+		"LANMEI_BOT_INTENT_TIMEOUT_SECONDS":        "bot.intent_timeout_seconds",
+		"LANMEI_BOT_TURTLE_SOUP_TIMEOUT_SECONDS":   "bot.turtle_soup_timeout_seconds",
+		"LANMEI_AI_LLM_API_KEY":                    "ai.llm_api_key",
+		"LANMEI_AI_LLM_BASE_URL":                   "ai.llm_base_url",
+		"LANMEI_AI_LLM_MODEL":                      "ai.llm_model",
+		"LANMEI_AI_LLM_MAX_TOKENS":                 "ai.llm_max_tokens",
+		"LANMEI_AI_LLM_TEMPERATURE":                "ai.llm_temperature",
+		"LANMEI_AI_LLM_PRESENCE_PENALTY":           "ai.llm_presence_penalty",
+		"LANMEI_AI_LLM_FREQUENCY_PENALTY":          "ai.llm_frequency_penalty",
+		"LANMEI_AI_LLM_TOP_P":                      "ai.llm_top_p",
+		"LANMEI_AI_LLM_TOP_K":                      "ai.llm_top_k",
+		"LANMEI_AI_LLM_REPETITION_PENALTY":         "ai.llm_repetition_penalty",
+		"LANMEI_AI_LLM_MIN_P":                      "ai.llm_min_p",
+		"LANMEI_AI_LLM_TOP_A":                      "ai.llm_top_a",
+		"LANMEI_AI_LLM_SEED":                       "ai.llm_seed",
+		"LANMEI_AI_INTENT_JUDGE_API_KEY":           "ai.intent_judge.api_key",
+		"LANMEI_AI_INTENT_JUDGE_BASE_URL":          "ai.intent_judge.base_url",
+		"LANMEI_AI_INTENT_JUDGE_MODEL":             "ai.intent_judge.model",
+		"LANMEI_AI_INTENT_JUDGE_TIMEOUT_SECONDS":   "ai.intent_judge.timeout_seconds",
+		"LANMEI_AI_EMBEDDING_API_KEY":              "ai.embedding_api_key",
+		"LANMEI_AI_EMBEDDING_BASE_URL":             "ai.embedding_base_url",
+		"LANMEI_AI_EMBEDDING_MODEL":                "ai.embedding_model",
+		"LANMEI_AI_EMBEDDING_DIM":                  "ai.embedding_dim",
+		"LANMEI_AI_MEMORY_MIN_SIMILARITY":          "ai.memory_min_similarity",
+		"LANMEI_AI_MEMORY_MIN_CONFIDENCE":          "ai.memory_min_confidence",
+		"LANMEI_AI_MEMORY_MIN_IMPORTANCE":          "ai.memory_min_importance",
+		"LANMEI_PLUGIN_ROOT_DIR":                   "plugin.root_dir",
+		"LANMEI_PLUGIN_NCM_URL":                    "plugin.ncm_url",
+		"LANMEI_PLUGIN_MUSIC_SEND_MODE":            "plugin.music_send_mode",
+		"LANMEI_PLUGIN_ANTIFRAUD_ENDPOINT":         "plugin.antifraud.endpoint",
+		"LANMEI_PLUGIN_ANTIFRAUD_AUTO_THRESHOLD":   "plugin.antifraud.auto_threshold",
 		"LANMEI_PLUGIN_ANTIFRAUD_REPORT_THRESHOLD": "plugin.antifraud.report_threshold",
 		"LANMEI_PLUGIN_ANTIFRAUD_MUTE_SECONDS":     "plugin.antifraud.mute_seconds",
 		"LANMEI_PLUGIN_ANTIFRAUD_NOTICE_GROUP_ID":  "plugin.antifraud.notice_group_id",
 		"LANMEI_PLUGIN_ANTIFRAUD_PANEL_BASE_URL":   "plugin.antifraud.panel_base_url",
-		"LANMEI_KNOWLEDGE_ENABLED":               "knowledge.enabled",
-		"LANMEI_KNOWLEDGE_AUTO_RECALL_LIMIT":     "knowledge.auto_recall_limit",
+		"LANMEI_KNOWLEDGE_ENABLED":                 "knowledge.enabled",
+		"LANMEI_KNOWLEDGE_AUTO_RECALL_LIMIT":       "knowledge.auto_recall_limit",
 		// 多媒体（RustFS）与机器人行为配置
-		"LANMEI_MEDIA_ENDPOINT":   "bot.media.endpoint",
-		"LANMEI_MEDIA_ACCESS_KEY": "bot.media.access_key",
-		"LANMEI_MEDIA_SECRET_KEY": "bot.media.secret_key",
-		"LANMEI_MEDIA_BUCKET":     "bot.media.bucket",
-		"LANMEI_MEDIA_REGION":     "bot.media.region",
-		"LANMEI_TOPIC_ENABLED":    "bot.topic.enabled",
+		"LANMEI_MEDIA_ENDPOINT":         "bot.media.endpoint",
+		"LANMEI_MEDIA_ACCESS_KEY":       "bot.media.access_key",
+		"LANMEI_MEDIA_SECRET_KEY":       "bot.media.secret_key",
+		"LANMEI_MEDIA_BUCKET":           "bot.media.bucket",
+		"LANMEI_MEDIA_REGION":           "bot.media.region",
+		"LANMEI_TOPIC_ENABLED":          "bot.topic.enabled",
+		"LANMEI_TOPIC_MAX_AUTO_REPLIES": "bot.topic.max_auto_replies",
 		// 管理面板（docker-compose 经 nginx 托管前端时通过 env 启用）
 		"LANMEI_MANAGER_ENABLED":       "manager.enabled",
 		"LANMEI_MANAGER_LISTEN_ADDR":   "manager.listen_addr",
@@ -183,6 +192,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("bot.topic.cooling_timeout_minutes", 30)
 	v.SetDefault("bot.topic.semantic_threshold", 0.5)
 	v.SetDefault("bot.topic.credit_enabled", true)
+	v.SetDefault("bot.topic.max_auto_replies", 2)
 	v.SetDefault("bot.topic.linguistic_strong_threshold", 0.7)
 	v.SetDefault("bot.topic.linguistic_weak_threshold", 0.4)
 	v.SetDefault("bot.topic.archive_interval_seconds", 60)
@@ -220,6 +230,18 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ai.llm_model", "gpt-4o-mini")
 	v.SetDefault("ai.llm_max_tokens", 4096)
 	v.SetDefault("ai.llm_temperature", 0.7)
+	// 适度的话题/词频惩罚：缓和模型反复提及同一件事、同一关键词的倾向。
+	// 取值 0~2，过高会让中文表达变得生硬，建议 0.2~0.6。
+	v.SetDefault("ai.llm_presence_penalty", 0.3)
+	v.SetDefault("ai.llm_frequency_penalty", 0.2)
+	// 酒馆风格采样默认值：top_p 0.95 是通用安全值；top_k / min_p / top_a /
+	// repetition_penalty / seed 默认关闭，只有本地推理后端或明确支持的端点再开启。
+	v.SetDefault("ai.llm_top_p", 0.95)
+	v.SetDefault("ai.llm_top_k", 0)
+	v.SetDefault("ai.llm_repetition_penalty", 1.0)
+	v.SetDefault("ai.llm_min_p", 0.0)
+	v.SetDefault("ai.llm_top_a", 0.0)
+	v.SetDefault("ai.llm_seed", 0)
 
 	// Embedding 非敏感默认值（API Key 仅从环境变量读取）
 	// 默认维度 1024 与 memory_vectors / knowledge_chunks 的 vector(1024) 硬编码一致

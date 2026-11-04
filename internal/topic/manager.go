@@ -134,8 +134,26 @@ func (m *Manager) HandleGroupMessage(ctx context.Context, msg *IncomingMsg, judg
 	seq := m.bumpSeq(gk)
 	topics := m.groups[gk]
 
+	// 纯图片消息（描述由 MediaPass 写入 Content）：只有被 at 明确点名才回复。
+	// 视觉描述很容易让 LLM 误判"在跟机器人说话"，若按强提及回复，就会表现为
+	// "文字消息回一次 + 截图再答一次"。这里先短路：入窗但不回复。
+	atSelf := containsString(msg.AtTargets, msg.SelfID)
+	if msg.ImageOnly && !atSelf {
+		t := memberTopicOf(topics, msg.UserID)
+		if t == nil {
+			t = semanticMatch(m, activeOnly(topics), msg, vec, vecOK)
+		}
+		if t != nil {
+			// 不参与语义中心更新：图片描述容易把话题向量带偏。
+			m.continueChatLocked(t, msg, seq, now, nil, false)
+			m.persistLocked(ctx, gk, topics)
+		}
+		return &Decision{Reply: false, Topic: t, Mention: mention.Mode}
+	}
+
 	if mention.Strong {
 		t := semanticMatch(m, topics, msg, vec, vecOK)
+		related := true
 		if t == nil {
 			t = m.createTopicLocked(gk, msg, seq, now)
 			if vecOK {
@@ -143,7 +161,12 @@ func (m *Manager) HandleGroupMessage(ctx context.Context, msg *IncomingMsg, judg
 			}
 			topics = append(topics, t)
 		} else {
+			related = semanticRelevant(m, t, msg, vec, vecOK)
 			m.reenterLocked(t, msg, seq, now, vec, vecOK)
+		}
+		// 明确提及重置连续自动回复计数，允许一次新的追问。
+		if mem := t.Members[msg.UserID]; mem != nil {
+			mem.AutoReplies = 0
 		}
 		sortTopics(topics)
 		m.groups[gk] = topics
@@ -151,7 +174,7 @@ func (m *Manager) HandleGroupMessage(ctx context.Context, msg *IncomingMsg, judg
 		m.logger.Info("topic: 强提及 → 回复",
 			zap.String("group", gk), zap.String("user", msg.UserID),
 			zap.String("mode", mention.Mode.String()), zap.String("topic", t.ID))
-		return &Decision{Reply: true, Topic: t, Mention: mention.Mode}
+		return &Decision{Reply: true, Topic: t, Mention: mention.Mode, Strong: true, Related: related}
 	}
 
 	if mention.Mentioned && !mention.Strong {
@@ -174,7 +197,7 @@ func (m *Manager) HandleGroupMessage(ctx context.Context, msg *IncomingMsg, judg
 			m.persistLocked(ctx, gk, topics)
 			m.logger.Info("topic: 弱提及 → 拉入话题（静默）",
 				zap.String("group", gk), zap.String("user", msg.UserID), zap.String("mode", mention.Mode.String()), zap.String("topic", t.ID))
-			return &Decision{Reply: false, Topic: t, Mention: mention.Mode}
+			return &Decision{Reply: false, Topic: t, Mention: mention.Mode, Related: true}
 		}
 		// 已是成员：续聊回复（纯媒体消息无文本不参与，配额由实际回复时消耗/授予）。
 		if msg.Content != "" {
@@ -183,12 +206,12 @@ func (m *Manager) HandleGroupMessage(ctx context.Context, msg *IncomingMsg, judg
 				m.persistLocked(ctx, gk, topics)
 				m.logger.Info("topic: 成员续聊（配额）→ 回复",
 					zap.String("group", gk), zap.String("user", msg.UserID), zap.String("topic", t.ID))
-				return &Decision{Reply: true, Topic: t, Mention: mention.Mode}
+				return &Decision{Reply: true, Topic: t, Mention: mention.Mode, Related: true}
 			}
 			m.persistLocked(ctx, gk, topics)
 			m.logger.Debug("topic: 成员续聊（无配额）→ 静默",
 				zap.String("group", gk), zap.String("user", msg.UserID), zap.String("topic", t.ID))
-			return &Decision{Reply: false, Topic: t, Mention: mention.Mode}
+			return &Decision{Reply: false, Topic: t, Mention: mention.Mode, Related: true}
 		}
 	}
 
@@ -203,8 +226,10 @@ func (m *Manager) HandleGroupMessage(ctx context.Context, msg *IncomingMsg, judg
 				m.persistLocked(ctx, gk, topics)
 				m.logger.Info("topic: 成员延续对话（配额）→ 回复",
 					zap.String("group", gk), zap.String("user", msg.UserID), zap.String("topic", t.ID))
-				return &Decision{Reply: true, Topic: t, Mention: mention.Mode}
+				return &Decision{Reply: true, Topic: t, Mention: mention.Mode, Related: true}
 			}
+			m.persistLocked(ctx, gk, topics)
+			return &Decision{Reply: false, Topic: t, Mention: mention.Mode, Related: true}
 		} else {
 			// 用户切换了话题：脱离原话题，成员清空则冷却。
 			t.detachMember(msg.UserID)
@@ -317,10 +342,11 @@ func (m *Manager) BuildJudgeContext(msg *IncomingMsg) *intent.JudgeContext {
 //   - platform/groupID/topicID：定位目标话题
 //   - selfID：Bot 自身 ID（写入窗口消息的 UserID）
 //   - userID：被回复用户（消耗并重授回复配额）
+//   - explicit：本次回复是否由明确提及（at/强提及）触发；true 时重置连续自动回复计数
 //   - content：回复文本（超长按 maxRecordRunes 截断）
 //
 // 注意：topicID 为空或话题不存在时静默返回，不产生任何变更。
-func (m *Manager) RecordBotReply(ctx context.Context, platform, groupID, topicID, selfID, userID, content string) {
+func (m *Manager) RecordBotReply(ctx context.Context, platform, groupID, topicID, selfID, userID, content string, explicit bool) {
 	if m == nil || topicID == "" {
 		return
 	}
@@ -340,7 +366,32 @@ func (m *Manager) RecordBotReply(ctx context.Context, platform, groupID, topicID
 		// 真实回复成功后才消耗/授配额：若"决策回复但未实际回复"（意图忽略/失败）
 		// 则不经过此路径，配额得以保留。
 		t.consumeCredit(userID)
-		t.grantCredit(userID)
+		mem := t.Members[userID]
+		question := extractQuestion(content)
+		if explicit {
+			// 明确提及重置连续自动回复计数与重复提问计数；默认允许一轮追问，但不会无限续聊。
+			if mem != nil {
+				mem.AutoReplies = 0
+			}
+			t.QuestionRepeats = 0
+			t.LastBotQuestion = question
+			// 显式提及后总允许一轮自动续聊；后续是否继续由 max_auto_replies 限制。
+			t.grantCredit(userID)
+		} else if mem != nil {
+			mem.AutoReplies++
+			// 同一问题被 Bot 重复提出（说明上一问没得到回答，对方也没接话）：
+			// 不再续授配额，直接结束这条自动续聊链，避免"自问自答式"反复追问。
+			if question != "" && sameQuestion(question, t.LastBotQuestion) {
+				t.QuestionRepeats++
+			} else {
+				t.QuestionRepeats = 0
+				t.LastBotQuestion = question
+			}
+			limit := m.maxAutoReplies()
+			if (limit <= 0 || mem.AutoReplies < limit) && t.QuestionRepeats <= maxConsecutiveBotQuestions {
+				t.grantCredit(userID)
+			}
+		}
 		m.persistLocked(ctx, gk, topics)
 		m.logger.Debug("topic: Bot 回复已记录", zap.String("group", gk), zap.String("topic", t.ID))
 		return
@@ -817,6 +868,14 @@ func (m *Manager) windowMsgs() int {
 		return m.cfg.TopicWindowMsgs
 	}
 	return topicWindowDefault
+}
+
+// maxAutoReplies 同一成员连续自动回复上限（<=0 表示不限制）。
+func (m *Manager) maxAutoReplies() int {
+	if m.cfg == nil || m.cfg.MaxAutoReplies <= 0 {
+		return 0
+	}
+	return m.cfg.MaxAutoReplies
 }
 
 // bumpSeq 群消息序列号自增（每条群消息 +1，用于活跃窗口判定）。

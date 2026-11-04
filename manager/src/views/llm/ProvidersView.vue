@@ -37,6 +37,14 @@ const form = reactive({
   model: '',
   max_tokens: 4096,
   temperature: 0.7,
+  presence_penalty: 0.3,
+  frequency_penalty: 0.2,
+  top_p: 0.95,
+  top_k: 0,
+  repetition_penalty: 1.0,
+  min_p: 0,
+  top_a: 0,
+  seed: 0,
   in_price_per_m: 0,
   out_price_per_m: 0,
   enabled: true,
@@ -60,7 +68,9 @@ function openCreate() {
   editing.value = null
   Object.assign(form, {
     name: '', base_url: '', api_key: '', model: '', max_tokens: 4096,
-    temperature: 0.7, in_price_per_m: 0, out_price_per_m: 0, enabled: true, priority: 0,
+    temperature: 0.7, presence_penalty: 0.3, frequency_penalty: 0.2,
+    top_p: 0.95, top_k: 0, repetition_penalty: 1.0, min_p: 0, top_a: 0, seed: 0,
+    in_price_per_m: 0, out_price_per_m: 0, enabled: true, priority: 0,
   })
   editVisible.value = true
 }
@@ -70,6 +80,9 @@ function openEdit(p: LLMProvider) {
   Object.assign(form, {
     name: p.name, base_url: p.base_url, api_key: '', model: p.model,
     max_tokens: p.max_tokens, temperature: p.temperature,
+    presence_penalty: p.presence_penalty, frequency_penalty: p.frequency_penalty,
+    top_p: p.top_p, top_k: p.top_k, repetition_penalty: p.repetition_penalty,
+    min_p: p.min_p, top_a: p.top_a, seed: p.seed,
     in_price_per_m: p.in_price_per_m, out_price_per_m: p.out_price_per_m,
     enabled: p.enabled, priority: p.priority,
   })
@@ -93,6 +106,14 @@ async function save() {
       model: form.model,
       max_tokens: form.max_tokens,
       temperature: form.temperature,
+      presence_penalty: form.presence_penalty,
+      frequency_penalty: form.frequency_penalty,
+      top_p: form.top_p,
+      top_k: form.top_k,
+      repetition_penalty: form.repetition_penalty,
+      min_p: form.min_p,
+      top_a: form.top_a,
+      seed: form.seed,
       in_price_per_m: form.in_price_per_m,
       out_price_per_m: form.out_price_per_m,
       enabled: form.enabled,
@@ -234,6 +255,56 @@ onMounted(load)
         </t-row>
         <t-row :gutter="16">
           <t-col :span="12">
+            <t-form-item label="Presence Penalty（话题重复）">
+              <t-input-number v-model="form.presence_penalty" :min="0" :max="2" :step="0.1" />
+            </t-form-item>
+          </t-col>
+          <t-col :span="12">
+            <t-form-item label="Frequency Penalty（词频重复）">
+              <t-input-number v-model="form.frequency_penalty" :min="0" :max="2" :step="0.1" />
+            </t-form-item>
+          </t-col>
+        </t-row>
+        <p class="sampling-hint">
+          Top P 为通用核采样；Top K / Repetition Penalty / Min P / Top A 属于本地推理后端
+          扩展参数（llama.cpp、oobabooga 等），OpenAI / DeepSeek 等端点请保持关闭（0 / 1）。
+        </p>
+        <t-row :gutter="16">
+          <t-col :span="8">
+            <t-form-item label="Top P">
+              <t-input-number v-model="form.top_p" :min="0.01" :max="1" :step="0.05" />
+            </t-form-item>
+          </t-col>
+          <t-col :span="8">
+            <t-form-item label="Top K（0=关）">
+              <t-input-number v-model="form.top_k" :min="0" :max="200" />
+            </t-form-item>
+          </t-col>
+          <t-col :span="8">
+            <t-form-item label="Repetition Penalty">
+              <t-input-number v-model="form.repetition_penalty" :min="1" :max="2" :step="0.01" />
+            </t-form-item>
+          </t-col>
+        </t-row>
+        <t-row :gutter="16">
+          <t-col :span="8">
+            <t-form-item label="Min P（0=关）">
+              <t-input-number v-model="form.min_p" :min="0" :max="1" :step="0.01" />
+            </t-form-item>
+          </t-col>
+          <t-col :span="8">
+            <t-form-item label="Top A（0=关）">
+              <t-input-number v-model="form.top_a" :min="0" :max="1" :step="0.01" />
+            </t-form-item>
+          </t-col>
+          <t-col :span="8">
+            <t-form-item label="Seed（0=随机）">
+              <t-input-number v-model="form.seed" :min="0" />
+            </t-form-item>
+          </t-col>
+        </t-row>
+        <t-row :gutter="16">
+          <t-col :span="12">
             <t-form-item label="输入价格（元/百万）">
               <t-input-number v-model="form.in_price_per_m" :min="0" :step="0.01" />
             </t-form-item>
@@ -266,5 +337,11 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.sampling-hint {
+  margin: 0 0 12px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

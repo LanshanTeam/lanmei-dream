@@ -38,6 +38,9 @@ type Member struct {
 	LastActiveAt time.Time `json:"last_active_at"` // 最近一次相关发言
 	MentionCount int       `json:"mention_count"`  // 本话题内提及 Bot 次数（热度参考）
 	Credit       int       `json:"credit"`         // 回复配额：Bot 回复后授 1，下一条相关消息自动回复
+	// AutoReplies Bot 对该成员的连续自动回复次数（非显式提及触发）。
+	// 达到 max_auto_replies 后不再续授配额，直到该成员再次显式提及。
+	AutoReplies int `json:"auto_replies"`
 }
 
 // TopicMsg 话题内的一条消息（近窗口，供上下文注入与归档）。
@@ -68,6 +71,12 @@ type Topic struct {
 	Vector          []float32          `json:"vector,omitempty"` // 话题语义中心（embedding EMA）
 	ArchiveAttempts int                `json:"archive_attempts"` // 归档重试次数（超过上限放弃，防无限重试）
 	CreatedAt       time.Time          `json:"created_at"`
+	// LastBotQuestion Bot 最近一次回复中提出的问题（已归一化，空=未提问）。
+	// 用于识别"同一个问题被反复追问"：重复提问时不再续授回复配额。
+	LastBotQuestion string `json:"last_bot_question,omitempty"`
+	// QuestionRepeats 该问题被 Bot 重复提出的次数（显式提及后清零）。
+	// 达到 1 即视为"已经问过还没得到回答"，不再自动续聊，避免自问自答式追问。
+	QuestionRepeats int `json:"question_repeats,omitempty"`
 }
 
 // IsActive 判断话题是否活跃。
@@ -141,6 +150,7 @@ func (t *Topic) upsertMember(userID, nickname string, now time.Time, mention boo
 	}
 	if mention {
 		m.MentionCount++
+		m.AutoReplies = 0 // 显式提及重置连续自动回复计数
 	}
 }
 
@@ -189,6 +199,9 @@ type IncomingMsg struct {
 	// Content 消息文本；为空（如纯媒体）时不参与语义相关判定。
 	Content   string
 	AtTargets []string // 网关标准化的 at 目标列表
+	// ImageOnly 纯图片消息（无文字，描述由 MediaPass 写入 Content）。
+	// 仅入窗、不自动回复，避免"文字回复一次 + 截图再答一次"。
+	ImageOnly bool
 	// SentAt 消息发送时间；为零值时 Manager 取当前时间。
 	SentAt time.Time
 }
@@ -201,6 +214,11 @@ type Decision struct {
 	Topic *Topic
 	// Mention 提及模式（MentionNone 表示未提及）。
 	Mention MentionMode
+	// Strong 是否为强提及（at 或高置信度语言学提及）。
+	Strong bool
+	// Related 当前消息与话题是否语义相关。false 时对话链路不注入话题标签，
+	// 避免旧话题名每轮出现在 prompt 中造成话题锚定。
+	Related bool
 }
 
 // DecisionReply 便捷判断：是否为"应回复"决策。

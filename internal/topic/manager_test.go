@@ -231,7 +231,7 @@ func TestManagerFollowUpRepliesWithoutMention(t *testing.T) {
 		t.Fatal("first @bot message should reply and create topic")
 	}
 	// 模拟 Bot 实际回复 → 授回复配额
-	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "回复1")
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "回复1", true)
 
 	// 第二条：未提及（judge=nil，语义降级为成员制）→ 相关 + 有配额 → 延续回复
 	d2 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "那具体怎么操作呢", "bot_self"), nil)
@@ -243,7 +243,7 @@ func TestManagerFollowUpRepliesWithoutMention(t *testing.T) {
 	}
 
 	// 第三条：继续未提及追问 → Bot 回复后再授配额 → 继续回复
-	m.RecordBotReply(context.Background(), "qq", testGroup, d2.Topic.ID, "bot_self", "u1", "回复2")
+	m.RecordBotReply(context.Background(), "qq", testGroup, d2.Topic.ID, "bot_self", "u1", "回复2", false)
 	d3 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "好的，那其他群员也能看到吗", "bot_self"), nil)
 	if !d3.Reply {
 		t.Fatal("second follow-up without mention should keep replying")
@@ -280,7 +280,7 @@ func TestManagerWeakMentionPullsInAndCreditReplies(t *testing.T) {
 	}
 
 	// 真实回复成功后：配额保持可用，下一条相关消息继续回复
-	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "她一般晚上在线")
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "她一般晚上在线", false)
 	d4 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "好的 谢谢"), judgeWeak(0.5))
 	if !d4.Reply {
 		t.Fatal("member continue after bot reply (credit) should reply")
@@ -310,7 +310,7 @@ func TestManagerRecordBotReplyGrantsCredit(t *testing.T) {
 	if !d.Reply {
 		t.Fatal("strong mention should reply")
 	}
-	m.RecordBotReply(context.Background(), "qq", testGroup, d.Topic.ID, "bot_self", "u1", "今天晴转多云")
+	m.RecordBotReply(context.Background(), "qq", testGroup, d.Topic.ID, "bot_self", "u1", "今天晴转多云", true)
 	topic := groupTopics(m)[0]
 	foundBot := false
 	for _, tm := range topic.MsgWindow {
@@ -324,6 +324,101 @@ func TestManagerRecordBotReplyGrantsCredit(t *testing.T) {
 	d2 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "那明天呢"), judgeWeak(0.5))
 	if !d2.Reply {
 		t.Fatal("member continue after bot reply (credit) should reply")
+	}
+}
+
+// TestManagerMaxAutoRepliesStopsChain 非显式续聊达到上限后停止自动回复，
+// 直到该成员再次显式提及（at）才恢复。防止 Bot 与单个成员无限续聊、反复复述同一话题。
+func TestManagerMaxAutoRepliesStopsChain(t *testing.T) {
+	m := testManager(&config.TopicConfig{
+		TopicWindowMsgs: 20, CoolingTimeoutMinutes: 1,
+		CreditEnabled: true, MaxAutoReplies: 1,
+	}, nil, nil)
+
+	d1 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "@蓝妹 局域网怎么配", "bot_self"), nil)
+	if !d1.Reply {
+		t.Fatal("strong mention should reply")
+	}
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "先看网段", true)
+
+	// 第 1 次非显式续聊：仍在允许范围内 → 回复
+	d2 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "网段怎么看"), nil)
+	if !d2.Reply {
+		t.Fatal("first auto reply should be allowed")
+	}
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "用 ipconfig 看", false)
+
+	// 第 2 次非显式续聊：已达 max_auto_replies，不再续授配额 → 静默
+	d3 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "然后呢"), nil)
+	if d3.Reply {
+		t.Fatal("auto reply chain should stop at max_auto_replies")
+	}
+
+	// 再次显式 at：重置计数并恢复回复
+	d4 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "@蓝妹 那 DHCP 呢", "bot_self"), nil)
+	if !d4.Reply {
+		t.Fatal("explicit mention should reset auto reply counter")
+	}
+}
+
+// TestManagerRepeatedQuestionStopsChain Bot 重复追问同一问题（对方没回应）时不再续授配额，
+// 修复"反复追问局域网通没通"这类自问自答式追问。
+func TestManagerRepeatedQuestionStopsChain(t *testing.T) {
+	m := testManager(&config.TopicConfig{
+		TopicWindowMsgs: 20, CoolingTimeoutMinutes: 1, CreditEnabled: true,
+	}, nil, nil)
+
+	d1 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "@蓝妹 在吗", "bot_self"), nil)
+	if !d1.Reply {
+		t.Fatal("strong mention should reply")
+	}
+	// 显式回复里提了一个问题 → 授配额，允许一次自动续聊
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "在的，你那个局域网到底通没通？", true)
+	if !d1.Topic.hasCredit("u1") {
+		t.Fatal("explicit reply should grant one credit")
+	}
+
+	// 非显式回复又问了同一个问题 → 判定重复提问，不再授配额
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "所以局域网通没通呢？", false)
+	if d1.Topic.hasCredit("u1") {
+		t.Fatal("repeating the same question should not grant another credit")
+	}
+
+	// 用户没有明确提及的下一条消息 → 静默，不再追问
+	d2 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "还行吧"), nil)
+	if d2.Reply {
+		t.Fatal("repeated question should end the auto reply chain")
+	}
+}
+
+// TestManagerImageOnlySilent 纯图片消息只入窗、不自动回复（即使有配额），
+// 避免"文字回一次 + 截图再答一次"。
+func TestManagerImageOnlySilent(t *testing.T) {
+	m := testManager(&config.TopicConfig{
+		TopicWindowMsgs: 20, CoolingTimeoutMinutes: 1, CreditEnabled: true,
+	}, nil, nil)
+
+	d1 := m.HandleGroupMessage(context.Background(), groupMsg(testGroup, "u1", "@蓝妹 看这个", "bot_self"), nil)
+	if !d1.Reply {
+		t.Fatal("strong mention should reply")
+	}
+	m.RecordBotReply(context.Background(), "qq", testGroup, d1.Topic.ID, "bot_self", "u1", "看到了", true)
+
+	img := groupMsg(testGroup, "u1", "[图片：一张聊天截图]")
+	img.ImageOnly = true
+	d2 := m.HandleGroupMessage(context.Background(), img, nil)
+	if d2.Reply {
+		t.Fatal("image-only message should not trigger an automatic reply")
+	}
+	if d2.Topic == nil || len(d2.Topic.MsgWindow) == 0 {
+		t.Fatal("image-only message should still be recorded in the topic window")
+	}
+
+	// 被 at 点名时纯图片仍可回复
+	imgAt := groupMsg(testGroup, "u1", "[图片：一张报错截图]", "bot_self")
+	imgAt.ImageOnly = true
+	if d3 := m.HandleGroupMessage(context.Background(), imgAt, nil); !d3.Reply {
+		t.Fatal("image-only message with explicit at should reply")
 	}
 }
 

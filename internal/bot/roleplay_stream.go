@@ -77,12 +77,15 @@ func (p *RoleplayStreamPass) Execute(ctx *conduit.MessageContext) error {
 	// 群聊话题上下文（TopicGatePass 命中话题时写入黑板；nil = 私聊/无话题）
 	var topicCtx *llm.TopicContext
 	var topicID, selfID string
+	var topicStrong bool
 	if p.TopicMgr != nil {
 		if tc, ok := conduit.Get[*llm.TopicContext](ctx, KeyTopicContext); ok && tc != nil {
 			topicCtx = tc
-			topicID = tc.TopicID
 		}
+		// 话题不相关时 TopicGatePass 只写 ID（不注入窗口），记账仍按该话题进行。
+		topicID, _ = conduit.Get[string](ctx, KeyTopicID)
 		selfID = SelfIDFromCtx(ctx)
+		topicStrong = topicStrongFromCtx(ctx)
 	}
 
 	// 段落通道：流式 goroutine 写入，Bot.streamSegments 读取
@@ -91,7 +94,7 @@ func (p *RoleplayStreamPass) Execute(ctx *conduit.MessageContext) error {
 	// 独立 context：yield 后 ctx.Ctx 会被取消，流式必须使用独立上下文
 	streamCtx, streamCancel := context.WithTimeout(context.Background(), streamTimeout)
 
-	go p.runStream(streamCtx, streamCancel, segCh, userMsg, user.ID, nickname, ctx.GroupID, ctx.UserID, platform, topicID, selfID, topicCtx)
+	go p.runStream(streamCtx, streamCancel, segCh, userMsg, user.ID, nickname, ctx.GroupID, ctx.UserID, platform, topicID, selfID, topicCtx, topicStrong)
 
 	conduit.Set(ctx, KeyStreamChannel, segCh)
 
@@ -115,6 +118,7 @@ func (p *RoleplayStreamPass) runStream(
 	topicID string,
 	selfID string,
 	topicCtx *llm.TopicContext,
+	topicStrong bool,
 ) {
 	defer streamCancel()
 	defer close(segCh)
@@ -240,7 +244,7 @@ func (p *RoleplayStreamPass) runStream(
 
 	// 群聊话题命中：记录 Bot 回复（追加窗口、授回复配额，保持话题活跃）
 	if p.TopicMgr != nil && topicID != "" && resp.Content != "" {
-		p.TopicMgr.RecordBotReply(bgCtx, platform, groupID, topicID, selfID, senderID, resp.Content)
+		p.TopicMgr.RecordBotReply(bgCtx, platform, groupID, topicID, selfID, senderID, resp.Content, topicStrong)
 	}
 }
 

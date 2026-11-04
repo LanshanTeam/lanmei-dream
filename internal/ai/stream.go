@@ -32,6 +32,7 @@ func (s *ChatService) ChatStream(ctx context.Context, req *llm.ChatRequest, segm
 	if len(req.Messages) == 0 {
 		return nil, fmt.Errorf("chat stream: empty messages")
 	}
+	s.applySamplingDefaults(req)
 
 	queryVec, lastMsgContent, err := s.assembleContext(ctx, req)
 	if err != nil {
@@ -88,10 +89,7 @@ func (s *ChatService) chatStreamWithToolLoop(
 
 roundLoop:
 	for round := 0; round < maxToolCallRounds; round++ {
-		var streamOpts []model.Option
-		if disableThinking {
-			streamOpts = append(streamOpts, llm.DisableThinkingOption())
-		}
+		streamOpts := llm.SamplingOptions(req.Sampling, disableThinking)
 		reader, streamErr := chatModel.Stream(ctx, schemaMsgs, streamOpts...)
 		if streamErr != nil {
 			return nil, fmt.Errorf("chat stream: open stream: %w", streamErr)

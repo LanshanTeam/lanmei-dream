@@ -69,6 +69,14 @@ export interface LLMProvider {
   model: string
   max_tokens: number
   temperature: number
+  presence_penalty: number
+  frequency_penalty: number
+  top_p: number
+  top_k: number
+  repetition_penalty: number
+  min_p: number
+  top_a: number
+  seed: number
   in_price_per_m: number
   out_price_per_m: number
   enabled: boolean

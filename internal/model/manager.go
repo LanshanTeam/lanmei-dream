@@ -216,20 +216,31 @@ func (NodeTraffic) TableName() string { return "node_traffic" }
 // LLMProvider LLM Provider 配置（支持热切换 + 计费）。
 // APIKey 以 AES-256-GCM 加密存储（主密钥 LANMEI_MANAGER_SECRET_KEY）。
 type LLMProvider struct {
-	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name         string    `gorm:"size:64;uniqueIndex;not null" json:"name"`
-	BaseURL      string    `gorm:"size:255;not null" json:"base_url"`
-	APIKeyEnc    []byte    `gorm:"type:bytea" json:"-"` // AES-256-GCM 加密后的 API Key
-	Model        string    `gorm:"size:128;not null" json:"model"`
-	MaxTokens    int       `json:"max_tokens"`
-	Temperature  float64   `json:"temperature"`
-	InPricePerM  float64   `json:"in_price_per_m"`  // 每百万输入 token 价格（元）
-	OutPricePerM float64   `json:"out_price_per_m"` // 每百万输出 token 价格（元）
-	Enabled      bool      `gorm:"not null;default:true" json:"enabled"`
-	IsActive     bool      `gorm:"not null;default:false" json:"is_active"`
-	Priority     int       `gorm:"not null;default:0" json:"priority"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID          uint    `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name        string  `gorm:"size:64;uniqueIndex;not null" json:"name"`
+	BaseURL     string  `gorm:"size:255;not null" json:"base_url"`
+	APIKeyEnc   []byte  `gorm:"type:bytea" json:"-"` // AES-256-GCM 加密后的 API Key
+	Model       string  `gorm:"size:128;not null" json:"model"`
+	MaxTokens   int     `json:"max_tokens"`
+	Temperature float64 `json:"temperature"`
+	// PresencePenalty / FrequencyPenalty 采样重复惩罚（0~2）。
+	// 数据库默认值给到温和档位，避免存量 Provider 迁移后仍为 0（不生效）。
+	PresencePenalty  float64 `gorm:"not null;default:0.3" json:"presence_penalty"`
+	FrequencyPenalty float64 `gorm:"not null;default:0.2" json:"frequency_penalty"`
+	// 酒馆风格采样参数（0 / 1 表示不启用）。
+	TopP              float64   `gorm:"not null;default:0.95" json:"top_p"`
+	TopK              int       `gorm:"not null;default:0" json:"top_k"`
+	RepetitionPenalty float64   `gorm:"not null;default:1" json:"repetition_penalty"`
+	MinP              float64   `gorm:"not null;default:0" json:"min_p"`
+	TopA              float64   `gorm:"not null;default:0" json:"top_a"`
+	Seed              int       `gorm:"not null;default:0" json:"seed"`
+	InPricePerM       float64   `json:"in_price_per_m"`  // 每百万输入 token 价格（元）
+	OutPricePerM      float64   `json:"out_price_per_m"` // 每百万输出 token 价格（元）
+	Enabled           bool      `gorm:"not null;default:true" json:"enabled"`
+	IsActive          bool      `gorm:"not null;default:false" json:"is_active"`
+	Priority          int       `gorm:"not null;default:0" json:"priority"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // TableName 指定 GORM 表名为 llm_provider。

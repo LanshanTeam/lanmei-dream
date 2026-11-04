@@ -172,6 +172,7 @@ func (s *ChatService) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.Chat
 	if len(req.Messages) == 0 {
 		return nil, fmt.Errorf("chat: empty messages")
 	}
+	s.applySamplingDefaults(req)
 
 	queryVec, lastMsgContent, err := s.assembleContext(ctx, req)
 	if err != nil {
@@ -191,6 +192,40 @@ func (s *ChatService) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.Chat
 	s.asyncStoreAndCompress(ctx, req.UserID, req.GroupID, lastMsgContent, queryVec)
 
 	return resp, nil
+}
+
+// applySamplingDefaults 为对话请求填充客户端默认采样参数（仅角色扮演链路）。
+// 已显式设置的字段不覆盖；客户端未实现该扩展时保持 nil（不下发）。
+func (s *ChatService) applySamplingDefaults(req *llm.ChatRequest) {
+	provider, ok := s.client.(llm.SamplingDefaultsProvider)
+	if !ok {
+		return
+	}
+	d := provider.SamplingDefaults()
+	if req.Sampling.TopP == nil && d.TopP > 0 {
+		req.Sampling.TopP = &d.TopP
+	}
+	if req.Sampling.TopK == nil && d.TopK > 0 {
+		req.Sampling.TopK = &d.TopK
+	}
+	if req.Sampling.PresencePenalty == nil && d.PresencePenalty > 0 {
+		req.Sampling.PresencePenalty = &d.PresencePenalty
+	}
+	if req.Sampling.FrequencyPenalty == nil && d.FrequencyPenalty > 0 {
+		req.Sampling.FrequencyPenalty = &d.FrequencyPenalty
+	}
+	if req.Sampling.RepetitionPenalty == nil && d.RepetitionPenalty > 1 {
+		req.Sampling.RepetitionPenalty = &d.RepetitionPenalty
+	}
+	if req.Sampling.MinP == nil && d.MinP > 0 {
+		req.Sampling.MinP = &d.MinP
+	}
+	if req.Sampling.TopA == nil && d.TopA > 0 {
+		req.Sampling.TopA = &d.TopA
+	}
+	if req.Sampling.Seed == nil && d.Seed != 0 {
+		req.Sampling.Seed = &d.Seed
+	}
 }
 
 // assembleContext 执行 LOD 多级上下文组装、RAG 检索和 System Prompt 拼装，
@@ -234,6 +269,11 @@ func (s *ChatService) assembleContext(ctx context.Context, req *llm.ChatRequest)
 			}
 		}
 		conversationText = b.String()
+		if conversationText != "" {
+			// 摘要只作背景：不声明这一点时，模型容易把摘要里的旧话题当成"当前必须继续聊"，
+			// 表现为每轮都把同一件事重新拎出来（如反复追问"局域网通没通"）。
+			conversationText += "（以上仅为历史背景摘要，不要主动复述，也不要每轮把其中的旧话题重新拎出来。）\n"
+		}
 	}
 
 	// System Prompt 必须放在消息列表最前面。
@@ -306,7 +346,7 @@ func (s *ChatService) assembleContext(ctx context.Context, req *llm.ChatRequest)
 		// 不加固化指令时历史中带 emoji 的旧回复会被当作"预期风格"而污染当前行为。
 		msgs = append(msgs, llm.Message{
 			Role:    llm.RoleSystem,
-			Content: "注意：以上是历史对话记录，其中 assistant 的回复风格可能不完全符合当前规范。请严格遵守本 prompt 开头的「关键行为规则」，特别是 Emoji 使用规范和回复长度与分段规则（简单消息话少、单条；长回复按空行分段），不要被历史中的回复模式带偏。",
+			Content: "注意：以上是历史对话记录，其中 assistant 的回复风格可能不完全符合当前规范。请严格遵守本 prompt 开头的「关键行为规则」，特别是 Emoji 使用规范、回复长度与分段规则（简单消息话少、单条；长回复按空行分段）以及「不反复提及同一件事」（已问过且没得到回应的问题不要再问第二遍，对方已经转开的话题不要硬拉回来），不要被历史中的回复模式带偏。",
 		})
 	}
 
@@ -331,17 +371,21 @@ func (s *ChatService) assembleContext(ctx context.Context, req *llm.ChatRequest)
 			msgs = append(msgs, llm.Message{Role: role, Content: content})
 		}
 		label := req.TopicContext.Label
-		if label == "" {
-			label = "群聊话题"
-		}
 		members := strings.Join(req.TopicContext.Members, "、")
 		if members == "" {
 			members = "群内成员"
 		}
+		// 话题标签只在语义相关时注入（TopicGatePass 会把不相关话题的 Label 置空）。
+		// 每轮重复出现的话题名是最强的"话题锚定"来源，会让模型不断把旧话题拎回来。
+		prefix := ""
+		if label != "" {
+			prefix = "最近在聊的话题是「" + label + "」（仅作背景参考，不必强行延续）。"
+		}
 		msgs = append(msgs, llm.Message{
 			Role: llm.RoleSystem,
-			Content: "当前正处于群聊话题「" + label + "」中，参与成员：" + members +
-				"。请围绕该话题与成员们对话；只回应与话题相关的消息，如果用户在谈论其他事情，可以简短回应或不必回复。" +
+			Content: prefix + "参与成员：" + members +
+				"。优先回应当前消息；对方已经转到新内容时跟随新内容，不要为了维持话题而反复追问同一件事，" +
+				"也不要每轮都把旧话题重新拎出来。" +
 				"注意：以上群聊历史中，每条用户消息以「昵称(用户ID)：」开头标注实际发送者，括号内的用户ID 是稳定身份标识，" +
 				"同一用户即使昵称变化也是同一人，请据此区分不同成员的话；蓝妹（你）的发言不带前缀。",
 		})
@@ -419,6 +463,21 @@ func (s *ChatService) assembleContext(ctx context.Context, req *llm.ChatRequest)
 
 	// 追加当前轮用户消息；群聊场景补发言者前缀以与历史「昵称(用户ID)：」格式一致，
 	// 避免 LLM 把当前消息误判为历史中最后发言的成员。
+	// 生成前硬约束：显式列出"你最近说过的话"，逐条标注不要重复。
+	// 比抽象的"不要重复"更能压住"反复追问同一件事 / 同义改写同一句"的行为。
+	if recent := recentAssistantReplies(msgs, recentReplyGuardCount); len(recent) > 0 {
+		var b strings.Builder
+		b.WriteString("你最近已经说过以下内容（这是你自己的话，对方已经看过）：\n")
+		for _, r := range recent {
+			b.WriteString("- ")
+			b.WriteString(r)
+			b.WriteString("\n")
+		}
+		b.WriteString("不要重复、改写或换一种说法再说一遍；其中已经问过的问题不要再问第二次，" +
+			"尤其不要追问对方没有回应的问题。本轮只回应当前消息，必要时补充新信息或换个方向。")
+		msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: b.String()})
+	}
+
 	if req.TopicContext != nil && len(req.Messages) > 0 {
 		last := req.Messages[len(req.Messages)-1]
 		// 与话题历史统一使用平台用户 ID；缺失时不以数据库主键冒充。
@@ -441,6 +500,36 @@ func (s *ChatService) assembleContext(ctx context.Context, req *llm.ChatRequest)
 	return queryVec, lastMsgContent, nil
 }
 
+// recentReplyGuardCount 注入"最近说过的话"的条数上限。
+// 取最近 3 条足以覆盖连续追问/重复结论，过多会挤占上下文并让模型过度自我关注。
+const recentReplyGuardCount = 3
+
+// recentReplyGuardRunes 单条近期回复的截断长度（rune），避免长回复把提示撑爆。
+const recentReplyGuardRunes = 120
+
+// recentAssistantReplies 从已组装的消息中取最近若干条 assistant 回复（按时间正序）。
+// 跳过空内容与带图片的消息（图片回复的文本常是占位符，重复提示没有意义）。
+func recentAssistantReplies(msgs []llm.Message, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	var out []string
+	for i := len(msgs) - 1; i >= 0 && len(out) < limit; i-- {
+		if msgs[i].Role != llm.RoleAssistant {
+			continue
+		}
+		content := strings.TrimSpace(msgs[i].Content)
+		if content == "" || len(msgs[i].ImageURLs) > 0 {
+			continue
+		}
+		out = append(out, truncate(content, recentReplyGuardRunes))
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
 // chatWithToolLoop 执行带工具调用循环的对话流程：将工具定义绑定到 Eino ChatModel，
 // 在 LLM ↔ 工具间循环交互（LLM 生成 → 执行 ToolCalls → 回传结果）直至产出最终文本
 // 或达到 maxToolCallRounds，最后取最后一条 assistant 消息作为回复。
@@ -457,6 +546,7 @@ func (s *ChatService) chatWithToolLoop(ctx context.Context, req *llm.ChatRequest
 	// 注入调用者平台身份，工具 handler 通过 tool.CallerFrom 读取
 	ctx = s.withCaller(ctx, req)
 	toolInfos := s.toolReg.ToolInfos()
+	genOpts := llm.SamplingOptions(req.Sampling, req.DisableThinking != nil && *req.DisableThinking)
 	chatModel, err := einoClient.ChatWithTools(toolInfos)
 	if err != nil {
 		s.logger.Error("ai.Chat: bind tools failed, falling back to plain chat", zap.Error(err))
@@ -482,7 +572,7 @@ func (s *ChatService) chatWithToolLoop(ctx context.Context, req *llm.ChatRequest
 		schemaMsgs[i] = schemaMsg
 	}
 
-	schemaMsgs, totalInput, totalOutput, invokedTools, err := s.processToolCalls(ctx, chatModel, schemaMsgs)
+	schemaMsgs, totalInput, totalOutput, invokedTools, err := s.processToolCalls(ctx, chatModel, schemaMsgs, genOpts)
 	if err != nil {
 		return nil, fmt.Errorf("chat: tool call loop: %w", err)
 	}
@@ -518,12 +608,12 @@ func (s *ChatService) chatWithToolLoop(ctx context.Context, req *llm.ChatRequest
 // processToolCalls 执行 LLM 工具调用的循环处理，返回含所有中间轮次的消息列表与累计 token 用量。
 // 工具调用失败不中断循环，错误信息作为工具结果回传给 LLM，由其自行决定下一步；
 // 每个工具结果消息携带 ToolCallID 以便 LLM 关联请求；达到 maxToolCallRounds 后强制退出。
-func (s *ChatService) processToolCalls(ctx context.Context, chatModel model.BaseChatModel, msgs []*schema.Message) ([]*schema.Message, int, int, []string, error) {
+func (s *ChatService) processToolCalls(ctx context.Context, chatModel model.BaseChatModel, msgs []*schema.Message, opts []model.Option) ([]*schema.Message, int, int, []string, error) {
 	totalInput := 0
 	totalOutput := 0
 	var invokedTools []string
 	for round := 0; round < maxToolCallRounds; round++ {
-		resp, err := chatModel.Generate(ctx, msgs)
+		resp, err := chatModel.Generate(ctx, msgs, opts...)
 		if err != nil {
 			return msgs, totalInput, totalOutput, invokedTools, err
 		}

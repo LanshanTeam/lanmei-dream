@@ -60,12 +60,20 @@ func (m *ProviderManager) buildClientLocked(p *Provider) (*EinoClient, error) {
 		mt = 4096
 	}
 	client, err := NewEinoClient(context.Background(), &EinoOptions{
-		Provider:    p.Name,
-		BaseURL:     p.BaseURL,
-		APIKey:      p.APIKey,
-		Model:       p.Model,
-		MaxTokens:   mt,
-		Temperature: p.Temperature,
+		Provider:          p.Name,
+		BaseURL:           p.BaseURL,
+		APIKey:            p.APIKey,
+		Model:             p.Model,
+		MaxTokens:         mt,
+		Temperature:       p.Temperature,
+		PresencePenalty:   p.PresencePenalty,
+		FrequencyPenalty:  p.FrequencyPenalty,
+		TopP:              p.TopP,
+		TopK:              p.TopK,
+		RepetitionPenalty: p.RepetitionPenalty,
+		MinP:              p.MinP,
+		TopA:              p.TopA,
+		Seed:              p.Seed,
 	})
 	if err != nil {
 		return nil, err
@@ -226,6 +234,14 @@ func (m *ProviderManager) ModelName() string {
 		return ""
 	}
 	return c.ModelName()
+}
+
+// SamplingDefaults 委托当前活跃客户端的采样默认值。
+func (m *ProviderManager) SamplingDefaults() SamplingDefaults {
+	if c, ok := m.current().(SamplingDefaultsProvider); ok {
+		return c.SamplingDefaults()
+	}
+	return SamplingDefaults{}
 }
 
 // StreamChat 委托当前活跃客户端。

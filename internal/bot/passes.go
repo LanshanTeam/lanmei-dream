@@ -87,6 +87,10 @@ const (
 	// KeyMediaHandled 媒体已处理标记（bool）：MediaPass 写入；当前引擎内无读取方
 	// （路由实际以 KeyImageDesc 是否非空为依据），供插件/后续节点判断；缺失/false 表示未经媒体处理。
 	KeyMediaHandled = "bot.media_handled"
+	// KeyImageOnly 纯图片消息标记（bool）：MediaPass 写入（原消息无文字、描述由视觉理解生成）；
+	// TopicGatePass 读取并置 IncomingMsg.ImageOnly —— 这类消息只入窗、不自动回复，
+	// 避免"文字消息回一次 + 截图再答一次"表现为对同一件事回复两遍。
+	KeyImageOnly = "bot.image_only"
 
 	// 群聊话题（TopicGatePass 写入 ctx.data，供对话管线消费）
 
@@ -101,6 +105,10 @@ const (
 	// KeyMentionMode 提及模式（topic.MentionMode）：TopicGatePass 写入；Bot.isDirected 与
 	// TopicMentionModeFromCtx 读取（非 MentionNone 视为明确指向，回复时 at）；缺失时为零值 MentionNone。
 	KeyMentionMode = "bot.topic.mention" // topic.MentionMode 提及模式（data）
+	// KeyTopicStrong 强提及标记（bool）：TopicGatePass 写入（at 或高置信度语言学提及）；
+	// RoleplayStreamPass 读取，作为 RecordBotReply 的 explicit 参数 —— 显式提及会重置
+	// 连续自动回复计数与重复提问计数，非显式续聊则受 max_auto_replies 限制。
+	KeyTopicStrong = "bot.topic.strong" // bool 强提及（data）
 )
 
 // AdminGuardPass 校验 /admin 命令的发送者是否为超管。
@@ -436,6 +444,20 @@ func EventDataFromCtx(ctx *conduit.MessageContext) map[string]any {
 func ImageDescFromCtx(ctx *conduit.MessageContext) string {
 	desc, _ := conduit.Get[string](ctx, KeyImageDesc)
 	return desc
+}
+
+// imageOnlyFromCtx 从 ctx.data 读取"纯图片消息"标记（由 MediaPass 写入）。
+// 缺失/false 表示消息含文字或未经媒体处理。
+func imageOnlyFromCtx(ctx *conduit.MessageContext) bool {
+	v, _ := conduit.Get[bool](ctx, KeyImageOnly)
+	return v
+}
+
+// topicStrongFromCtx 从 ctx.data 读取强提及标记（由 TopicGatePass 写入）。
+// 缺失/false 表示非显式提及触发的回复。
+func topicStrongFromCtx(ctx *conduit.MessageContext) bool {
+	v, _ := conduit.Get[bool](ctx, KeyTopicStrong)
+	return v
 }
 
 // TopicContextFromCtx 从 ctx.data 读取群聊话题上下文（由 TopicGatePass 写入）。
