@@ -86,6 +86,9 @@ func (p *MediaPass) Execute(ctx *conduit.MessageContext) error {
 		if strings.TrimSpace(ctx.RawMsg) == "" {
 			// 纯图片消息：描述即消息文本，进入正常对话流
 			ctx.RawMsg = desc
+			// 标记"纯图片"：话题系统据此只入窗不自动回复（除非被 at/强提及点名），
+			// 避免同一张截图触发一次额外回复。
+			conduit.Set(ctx, KeyImageOnly, true)
 		}
 	}
 	return nil

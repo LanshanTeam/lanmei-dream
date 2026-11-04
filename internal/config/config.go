@@ -200,6 +200,18 @@ type AIConfig struct {
 	LLMModel       string  `mapstructure:"llm_model"`
 	LLMMaxTokens   int     `mapstructure:"llm_max_tokens"`
 	LLMTemperature float64 `mapstructure:"llm_temperature"`
+	// LLMPresencePenalty 话题/用词重复惩罚（0~2）：越高越倾向引入新话题与新表达，
+	// 用于抑制跨轮反复提及同一件事。0 表示不启用。
+	LLMPresencePenalty float64 `mapstructure:"llm_presence_penalty"`
+	// LLMFrequencyPenalty 词频重复惩罚（0~2）：越高越抑制同一词/短语在回复内反复出现。
+	LLMFrequencyPenalty float64 `mapstructure:"llm_frequency_penalty"`
+	// 酒馆（SillyTavern）风格采样参数，0 / 1 表示不启用。
+	LLMTopP              float64 `mapstructure:"llm_top_p"`
+	LLMTopK              int     `mapstructure:"llm_top_k"`
+	LLMRepetitionPenalty float64 `mapstructure:"llm_repetition_penalty"`
+	LLMMinP              float64 `mapstructure:"llm_min_p"`
+	LLMTopA              float64 `mapstructure:"llm_top_a"`
+	LLMSeed              int     `mapstructure:"llm_seed"`
 
 	// Embedding 配置（OpenAI 兼容 API）
 	EmbeddingBaseURL    string  `mapstructure:"embedding_base_url"`
@@ -263,6 +275,10 @@ type TopicConfig struct {
 	SemanticThreshold float64 `mapstructure:"semantic_threshold"`
 	// CreditEnabled 回复配额（防刷屏）
 	CreditEnabled bool `mapstructure:"credit_enabled"`
+	// MaxAutoReplies 同一成员连续自动回复上限（0 表示不限制）。
+	// 达到上限后，后续消息需要显式提及（at/强提及）才会再次回复，
+	// 避免 Bot 与单个成员形成无限续聊、反复复述同一话题。
+	MaxAutoReplies int `mapstructure:"max_auto_replies"`
 	// LinguisticStrongThreshold 提及判断"强提及"的置信度下限（0~1），默认 0.7。
 	// 达到该值视为确定在跟 Bot 说话 → 直接回复（等同 at 强信号）。
 	LinguisticStrongThreshold float64 `mapstructure:"linguistic_strong_threshold"`

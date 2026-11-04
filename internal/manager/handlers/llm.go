@@ -16,32 +16,48 @@ import (
 
 // ProviderReq Provider 读写请求体（APIKey 仅写入时使用，查询永远脱敏）。
 type ProviderReq struct {
-	Name         string  `json:"name"`
-	BaseURL      string  `json:"base_url"`
-	APIKey       string  `json:"api_key,omitempty"`
-	Model        string  `json:"model"`
-	MaxTokens    int     `json:"max_tokens"`
-	Temperature  float64 `json:"temperature"`
-	InPricePerM  float64 `json:"in_price_per_m"`
-	OutPricePerM float64 `json:"out_price_per_m"`
-	Enabled      *bool   `json:"enabled"`
-	Priority     int     `json:"priority"`
+	Name              string  `json:"name"`
+	BaseURL           string  `json:"base_url"`
+	APIKey            string  `json:"api_key,omitempty"`
+	Model             string  `json:"model"`
+	MaxTokens         int     `json:"max_tokens"`
+	Temperature       float64 `json:"temperature"`
+	PresencePenalty   float64 `json:"presence_penalty"`
+	FrequencyPenalty  float64 `json:"frequency_penalty"`
+	TopP              float64 `json:"top_p"`
+	TopK              int     `json:"top_k"`
+	RepetitionPenalty float64 `json:"repetition_penalty"`
+	MinP              float64 `json:"min_p"`
+	TopA              float64 `json:"top_a"`
+	Seed              int     `json:"seed"`
+	InPricePerM       float64 `json:"in_price_per_m"`
+	OutPricePerM      float64 `json:"out_price_per_m"`
+	Enabled           *bool   `json:"enabled"`
+	Priority          int     `json:"priority"`
 }
 
 // ProviderView Provider 查询视图（APIKey 脱敏）。
 type ProviderView struct {
-	ID           uint    `json:"id"`
-	Name         string  `json:"name"`
-	BaseURL      string  `json:"base_url"`
-	Model        string  `json:"model"`
-	MaxTokens    int     `json:"max_tokens"`
-	Temperature  float64 `json:"temperature"`
-	InPricePerM  float64 `json:"in_price_per_m"`
-	OutPricePerM float64 `json:"out_price_per_m"`
-	Enabled      bool    `json:"enabled"`
-	IsActive     bool    `json:"is_active"`
-	Priority     int     `json:"priority"`
-	HasAPIKey    bool    `json:"has_api_key"`
+	ID                uint    `json:"id"`
+	Name              string  `json:"name"`
+	BaseURL           string  `json:"base_url"`
+	Model             string  `json:"model"`
+	MaxTokens         int     `json:"max_tokens"`
+	Temperature       float64 `json:"temperature"`
+	PresencePenalty   float64 `json:"presence_penalty"`
+	FrequencyPenalty  float64 `json:"frequency_penalty"`
+	TopP              float64 `json:"top_p"`
+	TopK              int     `json:"top_k"`
+	RepetitionPenalty float64 `json:"repetition_penalty"`
+	MinP              float64 `json:"min_p"`
+	TopA              float64 `json:"top_a"`
+	Seed              int     `json:"seed"`
+	InPricePerM       float64 `json:"in_price_per_m"`
+	OutPricePerM      float64 `json:"out_price_per_m"`
+	Enabled           bool    `json:"enabled"`
+	IsActive          bool    `json:"is_active"`
+	Priority          int     `json:"priority"`
+	HasAPIKey         bool    `json:"has_api_key"`
 }
 
 // ListProviders 列出全部 Provider（APIKey 脱敏）。
@@ -87,16 +103,24 @@ func (h *Handler) CreateProvider(c fiber.Ctx) error {
 		enabled = *req.Enabled
 	}
 	p := &model.LLMProvider{
-		Name:         req.Name,
-		BaseURL:      req.BaseURL,
-		APIKeyEnc:    enc,
-		Model:        req.Model,
-		MaxTokens:    req.MaxTokens,
-		Temperature:  req.Temperature,
-		InPricePerM:  req.InPricePerM,
-		OutPricePerM: req.OutPricePerM,
-		Enabled:      enabled,
-		Priority:     req.Priority,
+		Name:              req.Name,
+		BaseURL:           req.BaseURL,
+		APIKeyEnc:         enc,
+		Model:             req.Model,
+		MaxTokens:         req.MaxTokens,
+		Temperature:       req.Temperature,
+		PresencePenalty:   clampPenalty(req.PresencePenalty),
+		FrequencyPenalty:  clampPenalty(req.FrequencyPenalty),
+		TopP:              clampFloat(req.TopP, 0, 1),
+		TopK:              max(req.TopK, 0),
+		RepetitionPenalty: clampRepetitionPenalty(req.RepetitionPenalty),
+		MinP:              clampFloat(req.MinP, 0, 1),
+		TopA:              clampFloat(req.TopA, 0, 1),
+		Seed:              req.Seed,
+		InPricePerM:       req.InPricePerM,
+		OutPricePerM:      req.OutPricePerM,
+		Enabled:           enabled,
+		Priority:          req.Priority,
 	}
 	if err := h.store.CreateLLMProvider(c.Context(), p); err != nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "创建失败（名称可能重复）"})
@@ -151,6 +175,28 @@ func (h *Handler) UpdateProvider(c fiber.Ctx) error {
 	if req.Temperature >= 0 {
 		p.Temperature = req.Temperature
 	}
+	if req.PresencePenalty >= 0 {
+		p.PresencePenalty = clampPenalty(req.PresencePenalty)
+	}
+	if req.FrequencyPenalty >= 0 {
+		p.FrequencyPenalty = clampPenalty(req.FrequencyPenalty)
+	}
+	if req.TopP >= 0 {
+		p.TopP = clampFloat(req.TopP, 0, 1)
+	}
+	if req.TopK >= 0 {
+		p.TopK = req.TopK
+	}
+	if req.RepetitionPenalty >= 0 {
+		p.RepetitionPenalty = clampRepetitionPenalty(req.RepetitionPenalty)
+	}
+	if req.MinP >= 0 {
+		p.MinP = clampFloat(req.MinP, 0, 1)
+	}
+	if req.TopA >= 0 {
+		p.TopA = clampFloat(req.TopA, 0, 1)
+	}
+	p.Seed = req.Seed
 	if req.InPricePerM >= 0 {
 		p.InPricePerM = req.InPricePerM
 	}
@@ -283,36 +329,85 @@ func (h *Handler) ReloadProviders(ctx context.Context) error {
 // toLLMProvider 将 DB 模型转换为运行时 Provider。
 func toLLMProvider(p *model.LLMProvider, apiKey string) *llm.Provider {
 	return &llm.Provider{
-		ID:           p.ID,
-		Name:         p.Name,
-		BaseURL:      p.BaseURL,
-		APIKey:       apiKey,
-		Model:        p.Model,
-		MaxTokens:    p.MaxTokens,
-		Temperature:  p.Temperature,
-		InPricePerM:  p.InPricePerM,
-		OutPricePerM: p.OutPricePerM,
-		Enabled:      p.Enabled,
-		Priority:     p.Priority,
+		ID:                p.ID,
+		Name:              p.Name,
+		BaseURL:           p.BaseURL,
+		APIKey:            apiKey,
+		Model:             p.Model,
+		MaxTokens:         p.MaxTokens,
+		Temperature:       p.Temperature,
+		PresencePenalty:   p.PresencePenalty,
+		FrequencyPenalty:  p.FrequencyPenalty,
+		TopP:              p.TopP,
+		TopK:              p.TopK,
+		RepetitionPenalty: p.RepetitionPenalty,
+		MinP:              p.MinP,
+		TopA:              p.TopA,
+		Seed:              p.Seed,
+		InPricePerM:       p.InPricePerM,
+		OutPricePerM:      p.OutPricePerM,
+		Enabled:           p.Enabled,
+		Priority:          p.Priority,
 	}
 }
 
 // toProviderView 转换为脱敏视图。
 func toProviderView(p *model.LLMProvider) ProviderView {
 	return ProviderView{
-		ID:           p.ID,
-		Name:         p.Name,
-		BaseURL:      p.BaseURL,
-		Model:        p.Model,
-		MaxTokens:    p.MaxTokens,
-		Temperature:  p.Temperature,
-		InPricePerM:  p.InPricePerM,
-		OutPricePerM: p.OutPricePerM,
-		Enabled:      p.Enabled,
-		IsActive:     p.IsActive,
-		Priority:     p.Priority,
-		HasAPIKey:    len(p.APIKeyEnc) > 0,
+		ID:                p.ID,
+		Name:              p.Name,
+		BaseURL:           p.BaseURL,
+		Model:             p.Model,
+		MaxTokens:         p.MaxTokens,
+		Temperature:       p.Temperature,
+		PresencePenalty:   p.PresencePenalty,
+		FrequencyPenalty:  p.FrequencyPenalty,
+		TopP:              p.TopP,
+		TopK:              p.TopK,
+		RepetitionPenalty: p.RepetitionPenalty,
+		MinP:              p.MinP,
+		TopA:              p.TopA,
+		Seed:              p.Seed,
+		InPricePerM:       p.InPricePerM,
+		OutPricePerM:      p.OutPricePerM,
+		Enabled:           p.Enabled,
+		IsActive:          p.IsActive,
+		Priority:          p.Priority,
+		HasAPIKey:         len(p.APIKeyEnc) > 0,
 	}
+}
+
+// clampPenalty 将重复惩罚限制在 0~2（OpenAI 兼容接口允许区间），负数按 0 处理。
+func clampPenalty(v float64) float64 {
+	if v <= 0 {
+		return 0
+	}
+	if v > 2 {
+		return 2
+	}
+	return v
+}
+
+// clampFloat 将采样参数限制在 [lo, hi] 区间。
+func clampFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// clampRepetitionPenalty 把 repetition_penalty 限制在 [1, 2]：1.0 为中性（不启用）。
+func clampRepetitionPenalty(v float64) float64 {
+	if v <= 1 {
+		return 1
+	}
+	if v > 2 {
+		return 2
+	}
+	return v
 }
 
 // UsageSummary 按维度汇总 token 用量（by=model|provider|scene|user_id|group_id|platform）。

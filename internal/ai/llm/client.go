@@ -51,6 +51,32 @@ type TopicContext struct {
 	Recent  []TopicMsg `json:"recent"` // 话题内近期消息（替代 LOD 的部分片段）
 }
 
+// SamplingParams 请求级采样参数（酒馆风格），nil 字段沿用客户端默认值。
+// 仅角色扮演对话链路下发；意图分析、记忆压缩等结构化输出不设置，
+// 避免 top_k / repetition_penalty 等非标准参数影响 JSON 稳定性。
+type SamplingParams struct {
+	TopP              *float64 `json:"top_p,omitempty"`
+	TopK              *int     `json:"top_k,omitempty"`
+	PresencePenalty   *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  *float64 `json:"frequency_penalty,omitempty"`
+	RepetitionPenalty *float64 `json:"repetition_penalty,omitempty"`
+	MinP              *float64 `json:"min_p,omitempty"`
+	TopA              *float64 `json:"top_a,omitempty"`
+	Seed              *int     `json:"seed,omitempty"`
+}
+
+// SamplingDefaults 客户端级采样默认值（0 / 1 表示不启用对应参数）。
+type SamplingDefaults struct {
+	TopP              float64
+	TopK              int
+	PresencePenalty   float64
+	FrequencyPenalty  float64
+	RepetitionPenalty float64
+	MinP              float64
+	TopA              float64
+	Seed              int
+}
+
 // ChatRequest 是一次对话请求的入参
 type ChatRequest struct {
 	Messages  []Message `json:"messages"`
@@ -73,6 +99,8 @@ type ChatRequest struct {
 	// 推理模型可能把输出预算全花在 reasoning 上导致 content 为空，
 	// 结构化短输出场景（海龟汤 JSON）应禁用思考，响应可降至秒级。
 	DisableThinking *bool `json:"-"`
+	// Sampling 采样参数覆盖（nil 字段沿用客户端默认值）。仅角色扮演链路填充。
+	Sampling SamplingParams `json:"sampling,omitempty"`
 }
 
 // ChatResponse 是对话服务的返回
@@ -137,6 +165,12 @@ type EinoCapable interface {
 	ProviderName() string
 	// ModelName 返回当前模型名
 	ModelName() string
+}
+
+// SamplingDefaultsProvider 可选扩展：给出当前客户端建议的采样默认值。
+// ChatService 在对话链路据此填充请求级参数；不实现该接口的客户端不启用惩罚。
+type SamplingDefaultsProvider interface {
+	SamplingDefaults() SamplingDefaults
 }
 
 // StreamingLLMClient 是 LLMClient 的可选扩展接口，表示支持流式响应。

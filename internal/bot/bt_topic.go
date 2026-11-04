@@ -56,6 +56,7 @@ func (p *TopicGatePass) Execute(ctx *conduit.MessageContext) error {
 		UserName:  nicknameFromCtx(ctx),
 		Content:   ctx.RawMsg,
 		AtTargets: AtTargetsFromCtx(ctx),
+		ImageOnly: imageOnlyFromCtx(ctx),
 		SentAt:    time.Now(),
 	}
 
@@ -107,15 +108,23 @@ func (p *TopicGatePass) Execute(ctx *conduit.MessageContext) error {
 		return nil
 	}
 
-	// 命中话题：写入上下文供对话管线消费（排除窗口末尾的当前消息，避免重复）
+	// 命中话题：写入上下文供对话管线消费（排除窗口末尾的当前消息，避免重复）。
+	//
+	// 只有语义相关（dec.Related）时才注入话题窗口与标签：话题名每轮出现在 prompt 里
+	// 会形成"话题锚定"，让模型反复把旧话题拎回来；不相关时连旧窗口一起跳过，
+	// 对话改用 L0 近期历史，避免旧话题内容把新话题带偏。
+	// KeyTopicID 始终写入（仅用于回复记账），不参与 prompt 组装。
 	if dec.Reply && dec.Topic != nil {
-		if tc := p.Manager.BuildTopicContext(dec.Topic, 1); tc != nil {
-			conduit.Set(ctx, KeyTopicID, tc.TopicID)
-			conduit.Set(ctx, KeyTopicLabel, tc.Label)
-			conduit.Set(ctx, KeyTopicContext, tc)
+		conduit.Set(ctx, KeyTopicID, dec.Topic.ID)
+		if dec.Related {
+			if tc := p.Manager.BuildTopicContext(dec.Topic, 1); tc != nil {
+				conduit.Set(ctx, KeyTopicLabel, tc.Label)
+				conduit.Set(ctx, KeyTopicContext, tc)
+			}
 		}
 	}
 	conduit.Set(ctx, KeyMentionMode, dec.Mention)
+	conduit.Set(ctx, KeyTopicStrong, dec.Strong)
 	conduit.Set(ctx, topicReplyKey, dec.Reply)
 	return nil
 }

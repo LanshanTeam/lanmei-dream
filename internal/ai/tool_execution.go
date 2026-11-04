@@ -133,10 +133,7 @@ func (s *ChatService) chatWithSearchTools(ctx context.Context, req *llm.ChatRequ
 	msgs = append(msgs, state.RetryEvidence()...)
 	response := &llm.ChatResponse{ToolArgs: make(map[string]string)}
 	defer func() { s.reportUsage(req, response.InputTokens, response.OutputTokens) }()
-	var opts []model.Option
-	if req.DisableThinking != nil && *req.DisableThinking {
-		opts = append(opts, llm.DisableThinkingOption())
-	}
+	opts := llm.SamplingOptions(req.Sampling, req.DisableThinking != nil && *req.DisableThinking)
 	if req.MaxTokens != nil {
 		opts = append(opts, model.WithMaxTokens(*req.MaxTokens))
 	}

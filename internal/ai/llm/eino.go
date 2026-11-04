@@ -56,12 +56,26 @@ func DisableThinkingOption() model.Option {
 
 // EinoOptions eino ChatModel 创建参数（provider 无关）
 type EinoOptions struct {
-	Provider    string  // Provider 名称（如 deepseek/qwen/openai），用于计费统计
-	BaseURL     string  // API 基础地址（OpenAI/DeepSeek/Qwen/Moonshot/Ark/Ollama 通用）
+	Provider    string // Provider 名称（如 deepseek/qwen/openai），用于计费统计
+	BaseURL     string // API 基础地址（OpenAI/DeepSeek/Qwen/Moonshot/Ark/Ollama 通用）
 	APIKey      string
 	Model       string
 	MaxTokens   int
 	Temperature float64
+	// PresencePenalty / FrequencyPenalty 采样重复惩罚（0~2，0 表示不启用）。
+	// 用于抑制模型反复提及同一个话题/关键词；过大会让中文表达生硬，建议 0.2~0.6。
+	PresencePenalty  float64
+	FrequencyPenalty float64
+	// 以下为酒馆（SillyTavern）风格采样参数，0 / 1 表示不启用：
+	// TopP 核采样；TopK 只从概率最高的 K 个 token 采样；RepetitionPenalty 重复惩罚
+	// （与 presence/frequency 不同，1.0 为中性，>1 抑制重复）；MinP / TopA 为
+	// 本地推理后端常见的动态截断参数；Seed 固定采样种子。
+	TopP              float64
+	TopK              int
+	RepetitionPenalty float64
+	MinP              float64
+	TopA              float64
+	Seed              int
 }
 
 // UsageHook 用量上报回调（由计费模块注入；nil 表示不上报）。
@@ -73,6 +87,7 @@ type EinoClient struct {
 	model     model.BaseChatModel
 	provider  string
 	modelName string
+	sampling  SamplingDefaults
 	usageHook UsageHook
 }
 
@@ -101,7 +116,106 @@ func NewEinoClient(ctx context.Context, opts *EinoOptions) (*EinoClient, error) 
 	if err != nil {
 		return nil, fmt.Errorf("llm: eino init: %w", err)
 	}
-	return &EinoClient{model: cm, provider: opts.Provider, modelName: opts.Model}, nil
+	return &EinoClient{
+		model:     cm,
+		provider:  opts.Provider,
+		modelName: opts.Model,
+		sampling: SamplingDefaults{
+			TopP:              clampRange(opts.TopP, 0, 1),
+			TopK:              max(opts.TopK, 0),
+			PresencePenalty:   clampRange(opts.PresencePenalty, 0, 2),
+			FrequencyPenalty:  clampRange(opts.FrequencyPenalty, 0, 2),
+			RepetitionPenalty: clampRepetitionPenalty(opts.RepetitionPenalty),
+			MinP:              clampRange(opts.MinP, 0, 1),
+			TopA:              clampRange(opts.TopA, 0, 1),
+			Seed:              opts.Seed,
+		},
+	}, nil
+}
+
+// clampRange 将采样参数限制在 [lo, hi] 区间。
+func clampRange(v, lo, hi float64) float64 {
+	if v <= 0 {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// clampRepetitionPenalty 把 repetition_penalty 限制在 [1, 2]：1.0 为中性（不启用），
+// 小于 1 会鼓励重复，与本项目用途相反，按 1 处理。
+func clampRepetitionPenalty(v float64) float64 {
+	if v <= 1 {
+		return 1
+	}
+	if v > 2 {
+		return 2
+	}
+	return v
+}
+
+// SamplingOptions 汇总请求级采样参数为 eino Option。
+// 标准参数 top_p 走通用 option；非标准参数（top_k / repetition_penalty / min_p /
+// top_a / seed）与关闭思考合并为单个 ExtraFields（eino 的 WithExtraFields 是覆盖
+// 语义，多次传入会互相覆盖）。这些非标准参数仅在显式配置时下发，
+// 避免 OpenAI / DeepSeek 等不支持的端点因未知字段报 400。
+func SamplingOptions(s SamplingParams, disableThinking bool) []model.Option {
+	var opts []model.Option
+	if s.TopP != nil {
+		if v := clampRange(*s.TopP, 0, 1); v > 0 {
+			opts = append(opts, model.WithTopP(float32(v)))
+		}
+	}
+
+	extra := make(map[string]any, 6)
+	if s.TopK != nil && *s.TopK > 0 {
+		extra["top_k"] = *s.TopK
+	}
+	if s.PresencePenalty != nil {
+		if v := clampRange(*s.PresencePenalty, 0, 2); v > 0 {
+			extra["presence_penalty"] = v
+		}
+	}
+	if s.FrequencyPenalty != nil {
+		if v := clampRange(*s.FrequencyPenalty, 0, 2); v > 0 {
+			extra["frequency_penalty"] = v
+		}
+	}
+	if s.RepetitionPenalty != nil {
+		if v := clampRepetitionPenalty(*s.RepetitionPenalty); v > 1 {
+			extra["repetition_penalty"] = v
+		}
+	}
+	if s.MinP != nil {
+		if v := clampRange(*s.MinP, 0, 1); v > 0 {
+			extra["min_p"] = v
+		}
+	}
+	if s.TopA != nil {
+		if v := clampRange(*s.TopA, 0, 1); v > 0 {
+			extra["top_a"] = v
+		}
+	}
+	if s.Seed != nil {
+		extra["seed"] = *s.Seed
+	}
+	if disableThinking {
+		extra["thinking"] = map[string]any{"type": "disabled"}
+	}
+	if len(extra) == 0 {
+		return opts
+	}
+	return append(opts, openai.WithExtraFields(extra))
+}
+
+// SamplingDefaults 返回客户端当前配置的采样默认值。
+func (c *EinoClient) SamplingDefaults() SamplingDefaults {
+	return c.sampling
 }
 
 // SetUsageHook 注入用量上报回调（nil 清除）。
@@ -164,17 +278,11 @@ func (c *EinoClient) ChatWithTools(tools []*schema.ToolInfo) (model.BaseChatMode
 func (c *EinoClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	msgs := ToSchemaMessages(req.Messages)
 
-	var opts []model.Option
+	opts := SamplingOptions(req.Sampling, req.DisableThinking != nil && *req.DisableThinking)
 	if req.MaxTokens != nil {
 		// 按请求覆盖输出上限（短输出场景需显式设小值）
 		opts = append(opts, model.WithMaxTokens(*req.MaxTokens))
 	}
-	if req.DisableThinking != nil && *req.DisableThinking {
-		// DeepSeek 等推理模型通过 thinking={"type":"disabled"} 关闭思考，
-		// 经 eino 的 ExtraFields 透传（OpenAI 兼容扩展字段）
-		opts = append(opts, DisableThinkingOption())
-	}
-
 	resp, err := c.model.Generate(ctx, msgs, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("llm: eino generate: %w", err)
@@ -195,7 +303,7 @@ func (c *EinoClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse,
 // StreamChat 实现 StreamingLLMClient 接口，以流式方式返回聊天补全。
 func (c *EinoClient) StreamChat(ctx context.Context, req *ChatRequest) (*schema.StreamReader[*schema.Message], error) {
 	msgs := ToSchemaMessages(req.Messages)
-	reader, err := c.model.Stream(ctx, msgs)
+	reader, err := c.model.Stream(ctx, msgs, SamplingOptions(req.Sampling, req.DisableThinking != nil && *req.DisableThinking)...)
 	if err != nil {
 		return nil, fmt.Errorf("llm: eino stream: %w", err)
 	}
@@ -209,7 +317,7 @@ func (c *EinoClient) StreamChatWithTools(ctx context.Context, req *ChatRequest, 
 		return nil, fmt.Errorf("llm: bind tools for stream: %w", err)
 	}
 	msgs := ToSchemaMessages(req.Messages)
-	reader, err := chatModel.Stream(ctx, msgs)
+	reader, err := chatModel.Stream(ctx, msgs, SamplingOptions(req.Sampling, req.DisableThinking != nil && *req.DisableThinking)...)
 	if err != nil {
 		return nil, fmt.Errorf("llm: eino stream with tools: %w", err)
 	}
@@ -220,7 +328,7 @@ func (c *EinoClient) StreamChatWithTools(ctx context.Context, req *ChatRequest, 
 func (c *EinoClient) ChatWithModel(ctx context.Context, req *ChatRequest, chatModel model.BaseChatModel) (*ChatResponse, error) {
 	msgs := ToSchemaMessages(req.Messages)
 
-	resp, err := chatModel.Generate(ctx, msgs)
+	resp, err := chatModel.Generate(ctx, msgs, SamplingOptions(req.Sampling, req.DisableThinking != nil && *req.DisableThinking)...)
 	if err != nil {
 		return nil, fmt.Errorf("llm: eino generate: %w", err)
 	}

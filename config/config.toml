@@ -2,6 +2,25 @@
 # 环境变量前缀为 LANMEI_（如 LANMEI_AI_LLM_API_KEY），同名环境变量优先于本文件。
 # 各键的代码默认值见 internal/config/init.go 的 setDefaults。
 
+# LLM 采样参数（非敏感；API Key / Base URL / 模型名走环境变量）
+# presence_penalty：话题重复惩罚，越高越倾向引入新话题；frequency_penalty：
+# 词频重复惩罚，越高越抑制同一词/短语在回复内反复出现。取值 0~2，0 表示不启用，
+# 过大（>0.8）会让中文表达生硬。管理面板启用时以面板中的 Provider 配置为准。
+# 以下为酒馆（SillyTavern）风格参数，仅角色扮演对话生效：
+#   top_p：核采样（0~1，默认 0.95）
+#   top_k / min_p / top_a：本地推理后端扩展（0 表示关闭；OpenAI/DeepSeek 等不要开）
+#   repetition_penalty：重复惩罚（1.0 表示关闭，>1 抑制重复；同上，仅本地后端支持）
+#   seed：随机种子（0 表示随机）
+[ai]
+llm_presence_penalty = 0.3
+llm_frequency_penalty = 0.2
+llm_top_p = 0.95
+llm_top_k = 0
+llm_repetition_penalty = 1.0
+llm_min_p = 0.0
+llm_top_a = 0.0
+llm_seed = 0
+
 # Agent 原生联网工具（不是业务插件），部署验收后开启；详见 docs/web-search.md。
 [ai.web_search]
 enabled = true
@@ -46,8 +65,10 @@ listen_addr = "0.0.0.0:8080"
 
 # 群聊话题（Topic）系统未在本文件展开，当前沿用代码默认值：
 # bot.topic.enabled=true、topic_window_msgs=20、cooling_timeout_minutes=30、
-# semantic_threshold=0.5、credit_enabled=true、linguistic_strong/weak_threshold=0.7/0.4、
+# semantic_threshold=0.5、credit_enabled=true、max_auto_replies=2、linguistic_strong/weak_threshold=0.7/0.4、
 # archive_interval_seconds=60；nicknames 为空时使用 bot.nickname。
+# max_auto_replies 是"同一成员连续非显式续聊"的上限（0 表示不限制）：达到后需再次
+# at/强提及才会继续回复，避免 Bot 与单个成员无限续聊、反复复述同一话题。
 # 总开关可用环境变量 LANMEI_TOPIC_ENABLED 覆盖，其余键需要时自行新增 [bot.topic] 分组。
 
 [bot.stream]

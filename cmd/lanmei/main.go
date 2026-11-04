@@ -75,11 +75,19 @@ func main() {
 	// LLM 客户端（eino，支持 OpenAI/DeepSeek/Qwen/Moonshot/Ark/Ollama）
 	if cfg.AI.LLMAPIKey != "" {
 		einoLLM, err := llm.NewEinoClient(ctx, &llm.EinoOptions{
-			BaseURL:     cfg.AI.LLMBaseURL,
-			APIKey:      cfg.AI.LLMAPIKey,
-			Model:       cfg.AI.LLMModel,
-			MaxTokens:   cfg.AI.LLMMaxTokens,
-			Temperature: cfg.AI.LLMTemperature,
+			BaseURL:           cfg.AI.LLMBaseURL,
+			APIKey:            cfg.AI.LLMAPIKey,
+			Model:             cfg.AI.LLMModel,
+			MaxTokens:         cfg.AI.LLMMaxTokens,
+			Temperature:       cfg.AI.LLMTemperature,
+			PresencePenalty:   cfg.AI.LLMPresencePenalty,
+			FrequencyPenalty:  cfg.AI.LLMFrequencyPenalty,
+			TopP:              cfg.AI.LLMTopP,
+			TopK:              cfg.AI.LLMTopK,
+			RepetitionPenalty: cfg.AI.LLMRepetitionPenalty,
+			MinP:              cfg.AI.LLMMinP,
+			TopA:              cfg.AI.LLMTopA,
+			Seed:              cfg.AI.LLMSeed,
 		})
 		if err != nil {
 			logger.Fatal("LLM 初始化失败", zap.Error(err))
@@ -89,14 +97,22 @@ func main() {
 			// 面板可在数据库 Provider 为空时继续使用；DB 有配置后由面板接管。
 			llmMgr = llm.NewProviderManager(logger)
 			if _, err := llmMgr.SetProviders([]*llm.Provider{{
-				Name:        "default",
-				BaseURL:     cfg.AI.LLMBaseURL,
-				APIKey:      cfg.AI.LLMAPIKey,
-				Model:       cfg.AI.LLMModel,
-				MaxTokens:   cfg.AI.LLMMaxTokens,
-				Temperature: cfg.AI.LLMTemperature,
-				Enabled:     true,
-				Priority:    0,
+				Name:              "default",
+				BaseURL:           cfg.AI.LLMBaseURL,
+				APIKey:            cfg.AI.LLMAPIKey,
+				Model:             cfg.AI.LLMModel,
+				MaxTokens:         cfg.AI.LLMMaxTokens,
+				Temperature:       cfg.AI.LLMTemperature,
+				PresencePenalty:   cfg.AI.LLMPresencePenalty,
+				FrequencyPenalty:  cfg.AI.LLMFrequencyPenalty,
+				TopP:              cfg.AI.LLMTopP,
+				TopK:              cfg.AI.LLMTopK,
+				RepetitionPenalty: cfg.AI.LLMRepetitionPenalty,
+				MinP:              cfg.AI.LLMMinP,
+				TopA:              cfg.AI.LLMTopA,
+				Seed:              cfg.AI.LLMSeed,
+				Enabled:           true,
+				Priority:          0,
 			}}); err != nil {
 				logger.Warn("默认 LLM Provider 注册失败", zap.Error(err))
 			}

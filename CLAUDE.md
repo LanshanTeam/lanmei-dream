@@ -139,7 +139,7 @@ docs/                → 架构与数据流文档
 | LANMEI_BOT_INTENT_TIMEOUT_SECONDS | 意图分析独立超时，默认 8 秒 |
 | LANMEI_BOT_TURTLE_SOUP_TIMEOUT_SECONDS | 海龟汤异步出题/判定上限，默认 120 秒 |
 | LANMEI_AI_LLM_API_KEY | LLM API Key（敏感；未配置则角色扮演不可用、意图分析降级为 chat） |
-| LANMEI_AI_LLM_BASE_URL / _MODEL / _MAX_TOKENS / _TEMPERATURE | LLM 端点、模型与采样参数 |
+| LANMEI_AI_LLM_BASE_URL / _MODEL / _MAX_TOKENS / _TEMPERATURE / _PRESENCE_PENALTY / _FREQUENCY_PENALTY / _TOP_P / _TOP_K / _REPETITION_PENALTY / _MIN_P / _TOP_A / _SEED | LLM 端点、模型与酒馆风格采样参数（仅角色扮演生效；top_k/repetition/min_p/top_a 仅本地推理后端支持） |
 | LANMEI_AI_EMBEDDING_API_KEY | Embedding API Key（敏感；未配置则向量召回与语义判定不可用，关键词/时间召回仍可用） |
 | LANMEI_AI_EMBEDDING_BASE_URL / _MODEL / _DIM | Embedding 端点、模型与维度（维度须与模型一致，影响建表维度） |
 | LANMEI_PLUGIN_ROOT_DIR | Wasm 插件托管目录，默认 ./data/plugins |
